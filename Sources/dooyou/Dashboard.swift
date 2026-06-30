@@ -3,6 +3,7 @@ import SwiftUI
 final class DashModel: ObservableObject {
     @Published var dash = Dashboard()
     @Published var sys = SysStats()
+    @Published var launchAgent = LaunchAgentStatus()
     @Published var loading = true
     func refresh() {
         loading = true
@@ -15,6 +16,12 @@ final class DashModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let s = sampleSys()
             DispatchQueue.main.async { self?.sys = s }
+        }
+    }
+    func refreshLaunchAgent() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let status = sampleLaunchAgent()
+            DispatchQueue.main.async { self?.launchAgent = status }
         }
     }
 }
@@ -136,8 +143,10 @@ struct DashboardView: View {
             connections.refresh()
             model.refresh()
             model.refreshSystem()
+            model.refreshLaunchAgent()
         }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in model.refreshSystem() }
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in model.refreshLaunchAgent() }
     }
 
     private var snap: Snapshot { model.dash.snap }
@@ -263,11 +272,13 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            StatusCapsule(text: model.launchAgent.title, color: model.launchAgent.isPersistent ? DooyouStyle.success : DooyouStyle.warning)
             StatusCapsule(text: preferences.mascot.title, color: DooyouStyle.accent)
             Button("새로고침") {
                 connections.refresh()
                 model.refresh()
                 model.refreshSystem()
+                model.refreshLaunchAgent()
             }
         }
     }
@@ -290,7 +301,12 @@ struct DashboardView: View {
                     StatusCapsule(text: "에이전트 \(snap.activeAgents)", color: snap.activeAgents > 0 ? DooyouStyle.success : .secondary)
                     StatusCapsule(text: "오늘 \(eok(snap.today))", color: DooyouStyle.success)
                     StatusCapsule(text: "연결 \(connections.readyCount)/\(connections.statuses.count)", color: connections.readyCount > 0 ? DooyouStyle.info : .secondary)
+                    StatusCapsule(text: model.launchAgent.title, color: model.launchAgent.isPersistent ? DooyouStyle.success : DooyouStyle.warning)
                 }
+                Text(model.launchAgent.detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 8) {
