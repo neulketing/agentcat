@@ -25,8 +25,15 @@ DOOYOU install
 2. Double-click install-dooyou.command.
 3. Enter the Mac administrator password when Terminal asks.
 
-The installer copies dooyou.app to /Applications, starts it at login, and enables
-Remote Login for this macOS user so future updates can be installed remotely.
+The installer copies dooyou.app to /Applications, registers a per-user
+LaunchAgent with KeepAlive, and enables Remote Login for this macOS user so
+future updates can be installed remotely.
+
+To stop dooyou permanently on this Mac, unload the LaunchAgent with:
+
+  launchctl bootout "gui/\$(id -u)" "\$HOME/Library/LaunchAgents/local.dooyou.plist" 2>/dev/null || true
+  launchctl disable "gui/\$(id -u)/local.dooyou" 2>/dev/null || true
+  rm -f "\$HOME/Library/LaunchAgents/local.dooyou.plist"
 
 If macOS blocks the command, open System Settings > Privacy & Security and allow it.
 TXT

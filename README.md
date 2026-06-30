@@ -1,4 +1,4 @@
-# dooyou
+# DOOYOU
 
 Tiny macOS menu bar monitor with a running mascot for local AI-agent activity.
 
@@ -10,6 +10,14 @@ with its own role and motion language instead of simple color variants.
 
 - macOS 13 or later
 - Xcode Command Line Tools or Xcode with Swift 5.9+
+
+## Project Docs
+
+- [Project summary](docs/DOOYOU_SUMMARY.md)
+- [Install and operations](docs/INSTALL_AND_OPERATIONS.md)
+- [Connectors and account routes](docs/CONNECTORS_AND_ACCOUNTS.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Folder map](docs/README.md)
 
 ## Install From Source
 
@@ -27,7 +35,9 @@ cd dooyou
 
 ## Start At Login
 
-Install the app into `/Applications/dooyou.app` and enable the per-user LaunchAgent:
+Install the app into `/Applications/dooyou.app` and enable the per-user
+LaunchAgent. The LaunchAgent runs DOOYOU directly with `KeepAlive`, so it comes
+back if the process exits.
 
 ```bash
 ./script/install_login_item.sh
@@ -80,9 +90,9 @@ The zip contains:
 - `INSTALL.txt`
 
 On another Mac, unzip the file and double-click `install-dooyou.command`. The
-installer copies `dooyou.app` to `/Applications`, starts it at login, and enables
-Remote Login for the current macOS user so future updates can be installed
-remotely.
+installer copies `dooyou.app` to `/Applications`, registers a `KeepAlive`
+LaunchAgent, starts it at login, and enables Remote Login for the current macOS
+user so future updates can be installed remotely.
 
 After Remote Login is enabled, future updates can be pushed from this repo:
 

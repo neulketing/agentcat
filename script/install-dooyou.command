@@ -5,7 +5,9 @@ APP_NAME="dooyou"
 BUNDLE_ID="local.dooyou"
 APP_SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$APP_NAME.app"
 APP_DEST="/Applications/$APP_NAME.app"
+APP_BINARY="$APP_DEST/Contents/MacOS/$APP_NAME"
 PLIST="$HOME/Library/LaunchAgents/$BUNDLE_ID.plist"
+LOG_DIR="$HOME/Library/Logs/dooyou"
 
 say_step() {
   printf '\n[%s] %s\n' "$APP_NAME" "$1"
@@ -30,6 +32,7 @@ sudo xattr -dr com.apple.quarantine "$APP_DEST" >/dev/null 2>&1 || true
 
 say_step "Enabling launch at login for the current user."
 mkdir -p "$(dirname "$PLIST")"
+mkdir -p "$LOG_DIR"
 cat >"$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,12 +42,18 @@ cat >"$PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/open</string>
-    <string>-n</string>
-    <string>$APP_DEST</string>
+    <string>$APP_BINARY</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/launchd.err.log</string>
 </dict>
 </plist>
 PLIST
@@ -67,11 +76,14 @@ REMOTE_LOGIN_STATUS="$(sudo systemsetup -getremotelogin 2>/dev/null || true)"
 TAILSCALE_IP="$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true)"
 
 say_step "Launching $APP_NAME."
-/usr/bin/open -n "$APP_DEST" || true
+if ! launchctl kickstart -k "gui/$(id -u)/$BUNDLE_ID" >/dev/null 2>&1; then
+  "$APP_BINARY" >/dev/null 2>&1 &
+fi
 
 echo
 echo "Installed: $APP_DEST"
 echo "LaunchAgent: $PLIST"
+echo "KeepAlive: enabled"
 echo "Remote Login: ${REMOTE_LOGIN_STATUS:-check System Settings > General > Sharing > Remote Login}"
 if [[ -n "$TAILSCALE_IP" ]]; then
   echo "Tailscale SSH target: $USER@$TAILSCALE_IP"
