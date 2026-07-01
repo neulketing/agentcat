@@ -199,6 +199,19 @@ func scan(daysWindow: Int = 8, includeMini: Bool = true) -> Dashboard {
                 if let r = fa.wkReset { a.weeklyResetsAt = Date(timeIntervalSince1970: r) }
             }
         }
+        if kind == .codex {
+            // Prefer a fresh probe capture over stale session rate_limits; probe when stale.
+            if let data = FileManager.default.contents(atPath: dooyouLimitPath(cfg)),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let cap = (obj["captured_at"] as? NSNumber)?.doubleValue,
+               Date().timeIntervalSince1970 - cap <= 12 * 3600, cap > best,
+               let rl = obj["rate_limits"] as? [String: Any] {
+                applyRateLimits(rl, &a)
+            }
+            if (a.fiveHourResetsAt.map { $0 < Date() } ?? true) || (a.weeklyResetsAt.map { $0 < Date() } ?? true) {
+                maybeProbeLimits(cfg)
+            }
+        }
         if kind == .glm, a.week == 0, a.today == 0 { continue }   // hide empty GLM row
         dash.snap.accounts.append(a)
     }
@@ -414,32 +427,69 @@ private func accountAdd(_ fa: FileAgg, _ bucket: Int, _ today: String, _ sevenAg
     }
 }
 
-private func claudeLimitCandidatePaths(_ configDir: String) -> [String] {
-    [
-        configDir + "/.omc/state/hud-stdin-cache.json",
-        configDir + "/hud/.omc/state/hud-stdin-cache.json",
-        configDir + "/projects/.omc/state/hud-stdin-cache.json",
-    ]
+// dooyou's own statusline capture (~/.dooyou/limits/<configDirName>.json),
+// written by the statusline wrapper. Independent of OMC internals.
+private func dooyouLimitPath(_ configDir: String) -> String {
+    NSHomeDirectory() + "/.dooyou/limits/" + (configDir as NSString).lastPathComponent + ".json"
+}
+
+// When a Claude account has no fresh statusline capture, ask the probe helper to
+// spend one cheap token and refresh its limits (writes the same limits file).
+// Gated per account so a scan loop never spawns more than one probe / 5 min; the
+// helper itself no-ops safely on an expired/absent token (idle accounts).
+private let probeLock = NSLock()
+private var lastProbe: [String: Date] = [:]
+// Resolve node by absolute path — the launchd-managed app has no interactive
+// shell PATH, so `zsh -lc node` can't be relied on. Prefer Homebrew, then nvm.
+private func resolveNode() -> String? {
+    let fm = FileManager.default
+    for c in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+        where fm.isExecutableFile(atPath: c) { return c }
+    let nvm = NSHomeDirectory() + "/.nvm/versions/node"
+    if let vers = try? fm.contentsOfDirectory(atPath: nvm) {
+        for v in vers.sorted().reversed() {
+            let p = nvm + "/" + v + "/bin/node"
+            if fm.isExecutableFile(atPath: p) { return p }
+        }
+    }
+    return nil
+}
+private func maybeProbeLimits(_ configDir: String) {
+    let helper = NSHomeDirectory() + "/.dooyou/bin/probe-limits.mjs"
+    let fm = FileManager.default
+    guard fm.fileExists(atPath: helper), let node = resolveNode() else { return }
+    probeLock.lock()
+    if let last = lastProbe[configDir], Date().timeIntervalSince(last) < 300 { probeLock.unlock(); return }
+    lastProbe[configDir] = Date()
+    probeLock.unlock()
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: node)
+    p.arguments = [helper, configDir]
+    p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()   // fire-and-forget; result is read on the next scan
 }
 
 private func loadClaudeLimits(_ configDir: String, _ a: inout Account) {
     let fm = FileManager.default
     let expectedPrefix = (configDir as NSString).appendingPathComponent("projects") + "/"
-    var best: (mtime: Date, rateLimits: [String: Any])? = nil
-    for path in claudeLimitCandidatePaths(configDir) {
-        guard let m = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
-              Date().timeIntervalSince(m) <= 12 * 3600,
-              let data = fm.contents(atPath: path),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let transcript = obj["transcript_path"] as? String,
-              transcript.hasPrefix(expectedPrefix),
-              let rl = obj["rate_limits"] as? [String: Any] else { continue }
-        if best == nil || m > best!.mtime { best = (m, rl) }
-    }
-    guard let rl = best?.rateLimits else {
+
+    guard let data = fm.contents(atPath: dooyouLimitPath(configDir)),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let cap = (obj["captured_at"] as? NSNumber)?.doubleValue,
+          Date().timeIntervalSince1970 - cap <= 12 * 3600,
+          (obj["transcript_path"] as? String)?.hasPrefix(expectedPrefix) ?? false,
+          let rl = obj["rate_limits"] as? [String: Any] else {
+        maybeProbeLimits(configDir)
         a.limitNote = "HUD 미확인"
         return
     }
+    applyRateLimits(rl, &a)
+}
+
+// Parse a {five_hour, seven_day} × {used_percentage, resets_at} dict into an account.
+private func applyRateLimits(_ rl: [String: Any], _ a: inout Account) {
     func window(_ key: String) -> (Int, Date?)? {
         guard let w = rl[key] as? [String: Any],
               let used = (w["used_percentage"] as? NSNumber)?.doubleValue else { return nil }

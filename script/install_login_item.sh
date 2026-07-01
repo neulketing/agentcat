@@ -17,6 +17,14 @@ pkill -x agentcat >/dev/null 2>&1 || true
 rm -rf "$APP_DEST"
 cp -R "$APP_SOURCE" "$APP_DEST"
 
+# Deploy the statusline-capture / limits-probe helpers to ~/.dooyou/bin.
+BIN_DEST="$HOME/.dooyou/bin"
+if [ -d "$ROOT_DIR/dooyou-bin" ]; then
+  mkdir -p "$BIN_DEST"
+  cp "$ROOT_DIR/dooyou-bin/"*.mjs "$ROOT_DIR/dooyou-bin/"*.sh "$BIN_DEST/" 2>/dev/null || true
+  chmod +x "$BIN_DEST/statusline-wrap.sh" 2>/dev/null || true
+fi
+
 mkdir -p "$(dirname "$PLIST")"
 mkdir -p "$LOG_DIR"
 cat >"$PLIST" <<PLIST
@@ -52,3 +60,7 @@ launchctl kickstart -k "gui/$(id -u)/local.dooyou"
 echo "Installed $APP_DEST"
 echo "Enabled login LaunchAgent $PLIST"
 echo "DOOYOU is now launchd-managed and will relaunch if it exits."
+echo
+echo "For live Claude limits, set each Claude Code config's statusLine command to:"
+echo "  sh \$HOME/.dooyou/bin/statusline-wrap.sh"
+echo "(wraps the existing HUD; captures rate_limits for dooyou). See dooyou-bin/README.md."
