@@ -42,3 +42,12 @@ For each Claude Code config dir, set `settings.json`:
 ```
 
 The wrapper calls the real HUD via `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hud/omc-hud.mjs`.
+
+## Agent quota-awareness
+
+`skills/dooyou-quota/SKILL.md` is the canonical skill that teaches an agent to
+run `quota` for quota-aware routing (pick the account with headroom, avoid maxed
+ones). `install_login_item.sh` deploys it into every installed agent CLI's skills
+dir — `~/.claude`, `~/.codex`, `~/.gjc`, `~/.hermes`, opencode. dooyou stays the
+single source of truth; each agent just consumes via `quota`, so there is no
+probe duplication.

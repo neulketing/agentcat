@@ -27,6 +27,17 @@ if [ -d "$ROOT_DIR/dooyou-bin" ]; then
   mkdir -p "$HOME/.local/bin" && ln -sf "$BIN_DEST/quota" "$HOME/.local/bin/quota"
 fi
 
+# Deploy the dooyou-quota skill into every agent CLI that discovers SKILL.md skills
+# (only where the CLI is actually installed — i.e., its config dir exists).
+SKILL_SRC="$ROOT_DIR/dooyou-bin/skills/dooyou-quota/SKILL.md"
+if [ -f "$SKILL_SRC" ]; then
+  for base in "$HOME/.claude" "$HOME/.codex" "$HOME/.gjc" "$HOME/.hermes" "$HOME/.config/opencode"; do
+    [ -d "$base" ] || continue
+    mkdir -p "$base/skills/dooyou-quota"
+    cp "$SKILL_SRC" "$base/skills/dooyou-quota/SKILL.md"
+  done
+fi
+
 mkdir -p "$(dirname "$PLIST")"
 mkdir -p "$LOG_DIR"
 cat >"$PLIST" <<PLIST
