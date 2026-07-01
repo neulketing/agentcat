@@ -33,8 +33,12 @@ rate-limit error otherwise).
 
 ## Rules
 
-- Prefer the highest-headroom account for the provider you need; map GJC providers
-  to dooyou accounts (openai-codex→codex, anthropic→claude, zai→glm).
-- Never route to a maxed (0% headroom) account.
+- **Maximize utilization — spread, don't funnel.** The goal is to use ALL the
+  accounts with headroom, not to pick one "best" and pile everything on it. For
+  parallel or heavy work, distribute across every account that has room (free
+  multi-account orchestration). `quota` tells you what's available; the specific
+  allocation is yours to decide autonomously.
+- Map providers to dooyou accounts: openai-codex→codex, anthropic→claude, zai→glm.
+- Never route to a maxed (0% headroom) account — it will just fail.
 - If `quota` is stale (`m!` marker) or errors, fall back to normal routing and
   note it — never block on it.
