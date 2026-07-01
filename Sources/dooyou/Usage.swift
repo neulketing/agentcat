@@ -15,6 +15,8 @@ struct Account: Identifiable {
     var fiveHourResetsAt: Date? = nil
     var weeklyPct: Int? = nil
     var weeklyResetsAt: Date? = nil
+    var monthlyPct: Int? = nil       // GLM (Z.ai) only — monthly window
+    var monthlyResetsAt: Date? = nil
     var email: String? = nil         // logged-in account (oauth / id_token)
     var limitNote: String? = nil
 }
@@ -212,7 +214,19 @@ func scan(daysWindow: Int = 8, includeMini: Bool = true) -> Dashboard {
                 maybeProbeLimits(cfg)
             }
         }
-        if kind == .glm, a.week == 0, a.today == 0 { continue }   // hide empty GLM row
+        if kind == .glm {
+            // GLM limits come from Z.ai's quota endpoint via the probe helper (no
+            // config dir of its own — GLM shares ~/.claude, so it has a fixed file).
+            if let data = FileManager.default.contents(atPath: NSHomeDirectory() + "/.dooyou/limits/glm.json"),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let cap = (obj["captured_at"] as? NSNumber)?.doubleValue,
+               Date().timeIntervalSince1970 - cap <= 12 * 3600,
+               let rl = obj["rate_limits"] as? [String: Any] {
+                applyRateLimits(rl, &a)
+            }
+            maybeProbeLimits("glm")
+        }
+        if kind == .glm, a.week == 0, a.today == 0, a.fiveHourPct == nil { continue }   // hide empty GLM row
         dash.snap.accounts.append(a)
     }
     if includeMini, let mini = loadMiniAccount() { dash.snap.accounts.append(mini) }
@@ -498,6 +512,7 @@ private func applyRateLimits(_ rl: [String: Any], _ a: inout Account) {
     }
     if let (p, r) = window("five_hour") { a.fiveHourPct = p; a.fiveHourResetsAt = r }
     if let (p, r) = window("seven_day") { a.weeklyPct = p; a.weeklyResetsAt = r }
+    if let (p, r) = window("monthly")   { a.monthlyPct = p; a.monthlyResetsAt = r }
 }
 
 // ---- logged-in account email (cached; never changes within a session) ----

@@ -108,11 +108,44 @@ async function probeCodex(configDir) {
   return rl;
 }
 
+// GLM (Z.ai). The `glm` worker runs Claude Code against Z.ai, but Z.ai does NOT
+// return per-window usage in message headers. The real quota lives at a dedicated
+// endpoint (used by OMC's HUD): GET /api/monitor/usage/quota/limit → data.limits[]
+// with unit-coded windows (3 = 5h, 6 = weekly, 5 = monthly) and a 0-100 percentage.
+// It's a plain GET — no inference tokens spent.
+function readZaiKey() {
+  try {
+    const m = readFileSync(join(process.env.HOME, '.secrets', 'master.env'), 'utf8')
+      .match(/^ZAI_API_KEY=(.+)$/m);
+    return m ? m[1].trim().replace(/^["']|["']$/g, '') : null;
+  } catch { return null; }
+}
+
+async function probeGlm() {
+  const key = readZaiKey();
+  if (!key) { console.error('no ZAI_API_KEY'); process.exitCode = 2; return null; }
+  const res = await fetch('https://api.z.ai/api/monitor/usage/quota/limit', {
+    headers: { authorization: `Bearer ${key}` },
+  });
+  const j = await res.json().catch(() => null);
+  const limits = j && j.data && j.data.limits;
+  if (!Array.isArray(limits)) { console.error('no glm quota (status ' + res.status + ')'); process.exitCode = 4; return null; }
+  const bucketFor = { 3: 'five_hour', 6: 'seven_day', 5: 'monthly' };
+  const rl = {};
+  for (const l of limits) {
+    const bucket = bucketFor[l.unit];
+    if (!bucket || l.percentage == null) continue;
+    rl[bucket] = { used_percentage: Math.round(l.percentage), resets_at: l.nextResetTime ? Math.floor(l.nextResetTime / 1000) : null };
+  }
+  return Object.keys(rl).length ? rl : null;
+}
+
 async function main() {
   const configDir = process.argv[2];
   if (!configDir) { console.error('usage: probe-limits.mjs <configDir>'); process.exit(64); }
+  const isGlm = configDir === 'glm';
   const isCodex = configDir.includes('/.codex');
-  const rate_limits = await (isCodex ? probeCodex(configDir) : probeClaude(configDir));
+  const rate_limits = await (isGlm ? probeGlm() : isCodex ? probeCodex(configDir) : probeClaude(configDir));
   if (!rate_limits) return;
 
   const dir = join(process.env.HOME, '.dooyou', 'limits');

@@ -164,7 +164,8 @@ func hudText(_ a: Account) -> Text? {
         return t
     }
     let parts = [seg("5h", a.fiveHourPct, a.fiveHourResetsAt),
-                 seg("wk", a.weeklyPct, a.weeklyResetsAt)].compactMap { $0 }
+                 seg("wk", a.weeklyPct, a.weeklyResetsAt),
+                 seg("mo", a.monthlyPct, a.monthlyResetsAt)].compactMap { $0 }
     if parts.isEmpty, let note = a.limitNote { return Text(note).foregroundColor(.secondary) }
     guard let first = parts.first else { return nil }
     return parts.dropFirst().reduce(first) { $0 + Text("  ") + $1 }
@@ -399,6 +400,7 @@ if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "dump" {
         var line = "  \(a.name): 오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))"
         if let p = a.fiveHourPct { line += " · 5h \(p)%" + (a.fiveHourResetsAt.map { "(\(countdown($0)))" } ?? "") }
         if let p = a.weeklyPct { line += " · wk \(p)%" + (a.weeklyResetsAt.map { "(\(countdown($0)))" } ?? "") }
+        if let p = a.monthlyPct { line += " · mo \(p)%" + (a.monthlyResetsAt.map { "(\(countdown($0)))" } ?? "") }
         if let note = a.limitNote { line += " · \(note)" }
         print(line)
     }
