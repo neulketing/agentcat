@@ -22,6 +22,16 @@ per-account 5h / weekly limits with reset times.
     `<configDir>/auth.json`, model from `<configDir>/config.toml`. `POST
     chatgpt.com/backend-api/codex/responses` (stream, read headers, abort) →
     `x-codex-{primary,secondary}-{used-percent,reset-at}` headers.
+  - GLM (`glm`, Z.ai): `ZAI_API_KEY` from `~/.secrets/master.env`. `GET
+    api.z.ai/api/monitor/usage/quota/limit` → `data.limits[]` with unit-coded
+    windows (3=5h, 6=weekly, 5=monthly). Plain GET — no inference tokens. (Z.ai
+    returns no per-window headers on the message endpoint, so this is the only
+    source.)
+- **quota** — read-only consumer of `~/.dooyou/limits/*.json`. Ranks every
+  account by headroom (`100 − max(5h/weekly/monthly used%)`). This is how other
+  agents (GJC, Hermes, …) get quota-aware routing without re-probing — dooyou is
+  the single source of truth. Symlinked into `~/.local/bin` so it's in PATH.
+  `quota` (table) · `quota --best [claude|codex|glm]` · `quota --json`.
 
 ## Enable the statusline capture
 
