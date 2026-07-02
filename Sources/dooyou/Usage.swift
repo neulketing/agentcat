@@ -73,19 +73,25 @@ func windowSum(_ byDay: [String: DayTok], lastDays: Int?) -> (tokens: Int, cost:
 // (auto-refreshed) with a builtin fallback so cost never silently zeroes out. ----
 struct Price {
     var input = 0.0, output = 0.0, cacheWrite = 0.0, cacheRead = 0.0
+    // 롱컨텍스트 티어 (예: gpt-5.5 입력 272k 초과 시 단가 상승). threshold 0 = 티어 없음.
+    var tierThreshold = 0
+    var tierInput = 0.0, tierOutput = 0.0, tierCacheRead = 0.0
+    private func rates(_ promptTok: Int) -> (i: Double, o: Double, r: Double) {
+        tierThreshold > 0 && promptTok > tierThreshold
+            ? (tierInput, tierOutput, tierCacheRead) : (input, output, cacheRead)
+    }
     func claudeCost(in inp: Int, out: Int, cw: Int, cr: Int) -> Double {
-        let a = Double(inp) * input, b = Double(out) * output
-        let c = Double(cw) * cacheWrite, d = Double(cr) * cacheRead
-        return (a + b + c + d) / 1e6
+        let t = rates(inp + cw + cr)
+        return (Double(inp) * t.i + Double(out) * t.o + Double(cw) * cacheWrite + Double(cr) * t.r) / 1e6
     }
     func codexCost(in inp: Int, cached: Int, out: Int) -> Double {
-        let a = Double(max(0, inp - cached)) * input
-        let b = Double(cached) * cacheRead, c = Double(out) * output
-        return (a + b + c) / 1e6
+        let t = rates(inp)
+        return (Double(max(0, inp - cached)) * t.i + Double(cached) * t.r + Double(out) * t.o) / 1e6
     }
 }
 
 private let builtinPrices: [String: Price] = [
+    "claude-fable-5": Price(input: 10, output: 50, cacheWrite: 12.5, cacheRead: 1.0),
     "claude-opus-4-8": Price(input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5),
     "claude-opus-4-7": Price(input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5),
     "claude-opus-4-6": Price(input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5),
@@ -95,7 +101,11 @@ private let builtinPrices: [String: Price] = [
     "gpt-5.1-codex": Price(input: 1.25, output: 10, cacheRead: 0.125),
     "gpt-5-codex": Price(input: 1.25, output: 10, cacheRead: 0.125),
     "gpt-5.1": Price(input: 1.25, output: 10, cacheRead: 0.125),
-    "gpt-5.5": Price(input: 5, output: 30, cacheRead: 0.5),
+    "gpt-5.3-codex": Price(input: 1.75, output: 14, cacheRead: 0.175),
+    "gpt-5.4": Price(input: 2.5, output: 15, cacheRead: 0.25,
+                     tierThreshold: 272_000, tierInput: 5, tierOutput: 22.5, tierCacheRead: 0.5),
+    "gpt-5.5": Price(input: 5, output: 30, cacheRead: 0.5,
+                     tierThreshold: 272_000, tierInput: 10, tierOutput: 45, tierCacheRead: 1.0),
     "glm-5.2": Price(input: 1.4, output: 4.4, cacheRead: 0.26),
 ]
 
@@ -111,8 +121,14 @@ private let priceTable: [String: Price] = {
         for (k, v) in models {
             guard let m = v as? [String: Any] else { continue }
             func d(_ key: String) -> Double { (m[key] as? NSNumber)?.doubleValue ?? 0 }
-            table[k] = Price(input: d("input"), output: d("output"),
-                             cacheWrite: d("cache_write"), cacheRead: d("cache_read"))
+            var p = Price(input: d("input"), output: d("output"),
+                          cacheWrite: d("cache_write"), cacheRead: d("cache_read"))
+            if let t0 = (m["tiers"] as? [[String: Any]])?.first {
+                func td(_ key: String) -> Double { (t0[key] as? NSNumber)?.doubleValue ?? 0 }
+                p.tierThreshold = (t0["threshold"] as? NSNumber)?.intValue ?? 0
+                p.tierInput = td("input"); p.tierOutput = td("output"); p.tierCacheRead = td("cache_read")
+            }
+            table[k] = p
         }
     }
     return table
@@ -579,4 +595,12 @@ func _selfCheck() {
     if let p = price("claude-opus-4-8") { assert(abs(1_000_000 * p.output / 1e6 - 25) < 1e-6, "opus price wrong") }
     else { assertionFailure("pricing table empty") }
     assert(price("claude-opus-4-8[1m]") != nil, "model suffix normalization broken")
+    // fable-5 단가($10/$50, opus의 2배) + gpt-5.5 롱컨텍스트 티어(272k 초과 시 output $30→$45)
+    if let f = price("claude-fable-5") { assert(abs(f.output - 50) < 1e-6, "fable price wrong") }
+    else { assertionFailure("fable-5 missing from pricing") }
+    if let g = price("gpt-5.5"), g.tierThreshold > 0 {
+        let base = g.codexCost(in: 100_000, cached: 0, out: 1_000)
+        let tier = g.codexCost(in: 300_000, cached: 0, out: 1_000)
+        assert(tier > base * 1.5, "gpt-5.5 long-context tier not applied")
+    }
 }
