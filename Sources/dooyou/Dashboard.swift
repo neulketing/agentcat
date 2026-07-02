@@ -6,11 +6,13 @@ final class DashModel: ObservableObject {
     @Published var launchAgent = LaunchAgentStatus()
     @Published var loading = true
     @Published var requestedRoute: DashboardRoute?
+    @Published var dispatch: [DispatchEntry] = []
     func refresh() {
         loading = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let d = scan(daysWindow: 1095)   // all-time (within ~3y cache)
-            DispatchQueue.main.async { self?.dash = d; self?.loading = false }
+            let disp = loadDispatchLog()
+            DispatchQueue.main.async { self?.dash = d; self?.dispatch = disp; self?.loading = false }
         }
     }
     func refreshSystem() {
@@ -231,8 +233,10 @@ struct DashboardView: View {
             heroBand
             OnboardingCard(preferences: preferences, connections: connections)
             summaryGrid
+            ROIPanel(preferences: preferences, cost30: w30.cost)
             ConnectionHealthStrip(model: connections)
             RouterStatusStrip(store: routerStore) { route = .router }
+            DispatchSection(entries: model.dispatch)
         case .router:
             routeHeader("라우터 / 승인", "PUG Brain Router 결정과 DOOYOU 승인 상태를 봅니다.")
             RouterDashboardSection(store: routerStore)

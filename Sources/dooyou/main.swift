@@ -121,12 +121,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let s = scanAll()
             let pm = currentPowerMode()
             let launchAgent = sampleLaunchAgent()
+            let dispatch = loadDispatchLog()
+            let etas = BurnMonitor.shared.record(s.accounts)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.snap = s
                 self.popModel.snap = s   // SwiftUI updates the popover in place — no controller swap
                 self.popModel.powerMode = pm
                 self.popModel.launchAgent = launchAgent
+                self.popModel.dispatch = dispatch
+                self.popModel.burnEta = etas
                 self.statusItem.button?.title = " " + eok(s.today)
             }
         }
@@ -157,6 +161,8 @@ final class PopModel: ObservableObject {
     @Published var powerMode = ""
     @Published var sys = SysStats()
     @Published var launchAgent = LaunchAgentStatus()
+    @Published var dispatch: [DispatchEntry] = []
+    @Published var burnEta: [String: Int] = [:]   // 계정명 → 5h 소진 ETA(분)
 }
 
 func powerIcon(_ mode: String) -> String {
@@ -220,6 +226,9 @@ struct DashView: View {
             RouterStatusStrip(store: routerStore) {
                 (NSApp.delegate as? AppDelegate)?.openRouterDashboard()
             }
+            DispatchStrip(entries: model.dispatch) {
+                (NSApp.delegate as? AppDelegate)?.openDashboard()
+            }
             SystemOverview(sys: sys)
             Divider()
             HStack { Text("합계 · 오늘").bold(); Spacer(); Text(eok(snap.today)).bold() }
@@ -238,6 +247,11 @@ struct DashView: View {
                         Text("오늘 \(eok(a.today)) · \(usd(a.todayCost))").font(.caption)
                         Text("7일 \(eok(a.week)) · \(usd(a.weekCost))").font(.caption2).foregroundStyle(.secondary)
                         if let hud = hudText(a) { hud.font(.caption2) }
+                        if let eta = model.burnEta[a.name] {
+                            Text("이 속도면 5h 소진까지 ~\(eta)분")
+                                .font(.caption2)
+                                .foregroundColor(eta <= 30 ? .red : .orange)
+                        }
                     }
                 }
             }

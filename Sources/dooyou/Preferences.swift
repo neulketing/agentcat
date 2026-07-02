@@ -79,6 +79,7 @@ struct AppPreferences: Codable {
     var mascot: MascotID = .coton
     var backgroundTheme: BackgroundThemeID = .automatic
     var onboardingSeen = false
+    var monthlySubscriptionUSD: Double? = nil   // ROI 카드 — 옵셔널: 구 preferences.json과 디코드 호환
 }
 
 final class PreferencesModel: ObservableObject {
@@ -102,6 +103,13 @@ final class PreferencesModel: ObservableObject {
 
     func finishOnboarding() {
         preferences.onboardingSeen = true
+        save()
+    }
+
+    var monthlySubscriptionUSD: Double? { preferences.monthlySubscriptionUSD }
+
+    func setMonthlySubscription(_ usd: Double) {
+        preferences.monthlySubscriptionUSD = usd
         save()
     }
 
