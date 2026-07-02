@@ -163,10 +163,11 @@ func scan(daysWindow: Int = 8, includeMini: Bool = true) -> Dashboard {
     var dash = Dashboard()
     let h = NSHomeDirectory()
     let claude1 = h + "/.claude/projects", claude2 = h + "/.claude-account2/projects"
+    let claude3 = h + "/.claude-account3/projects"
     let codex1 = h + "/.codex/sessions", codex2 = h + "/.codex-account2/sessions"
 
     // aggregates: each transcript file merged exactly once (independent of accounts)
-    for (root, isCodex) in [(claude1, false), (claude2, false), (codex1, true), (codex2, true)] {
+    for (root, isCodex) in [(claude1, false), (claude2, false), (claude3, false), (codex1, true), (codex2, true)] {
         for (path, mtime) in filesIn(root, now, maxAge, rollout: isCodex) {
             aggAdd(fileAggFor(path, mtime, codex: isCodex), aggFloor, &dash.agg)
         }
@@ -177,6 +178,7 @@ func scan(daysWindow: Int = 8, includeMini: Bool = true) -> Dashboard {
     let specs: [(String, Account.Kind, String, Int, Bool)] = [
         ("Claude 1", .claude, claude1, 0, false),
         ("Claude 2", .claude, claude2, 0, false),
+        ("Claude 3", .claude, claude3, 0, false),
         ("Codex 1",  .codex,  codex1,  1, true),
         ("Codex 2",  .codex,  codex2,  1, true),
         ("GLM",      .glm,    claude1, 2, false),

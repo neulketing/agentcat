@@ -288,7 +288,7 @@ private let defaultConnectors: [ConnectorDefinition] = {
             apiConsoleURL: "https://console.anthropic.com/settings/keys",
             mcpCommand: "",
             mcpURL: "",
-            dataRoots: [h + "/.claude/projects", h + "/.claude-account2/projects"],
+            dataRoots: [h + "/.claude/projects", h + "/.claude-account2/projects", h + "/.claude-account3/projects"],
             dataNeedle: "",
             enabled: true,
             isBuiltin: true

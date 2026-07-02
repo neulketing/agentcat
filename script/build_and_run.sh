@@ -23,9 +23,16 @@ if [[ "$MODE" != "--build-only" && "$MODE" != "build-only" ]]; then
   pkill -x agentcat >/dev/null 2>&1 || true
 fi
 
-swift build
-BUILD_DIR="$(swift build --show-bin-path)"
-BUILD_BINARY="$BUILD_DIR/$PACKAGE_PRODUCT"
+# ponytail: universal binary so the app runs on Intel Macs too (arm64 + x86_64).
+# Built per-arch then lipo'd, because multi-arch `swift build` needs full Xcode
+# while this path works with Command Line Tools alone. For an arm64-only build,
+# replace this block with `swift build`.
+swift build --arch arm64
+swift build --arch x86_64
+BUILD_DIR="$(swift build --arch arm64 --show-bin-path)"
+X86_DIR="$(swift build --arch x86_64 --show-bin-path)"
+BUILD_BINARY="$BUILD_DIR/${PACKAGE_PRODUCT}-universal"
+lipo -create "$BUILD_DIR/$PACKAGE_PRODUCT" "$X86_DIR/$PACKAGE_PRODUCT" -output "$BUILD_BINARY"
 
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"

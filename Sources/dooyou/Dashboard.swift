@@ -5,6 +5,7 @@ final class DashModel: ObservableObject {
     @Published var sys = SysStats()
     @Published var launchAgent = LaunchAgentStatus()
     @Published var loading = true
+    @Published var requestedRoute: DashboardRoute?
     func refresh() {
         loading = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -80,13 +81,14 @@ private let glmColor = Color(red: 0.20, green: 0.62, blue: 0.50)
 private func usedColor(_ p: Int) -> Color { p >= 90 ? DooyouStyle.error : (p >= 70 ? DooyouStyle.warning : DooyouStyle.success) }
 
 enum DashboardRoute: String, CaseIterable, Identifiable {
-    case home, connectors, analytics, accounts, mascot
+    case home, router, connectors, analytics, accounts, mascot
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .home: return "홈"
+        case .router: return "라우터"
         case .connectors: return "커넥터"
         case .analytics: return "분석"
         case .accounts: return "계정"
@@ -97,6 +99,7 @@ enum DashboardRoute: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .home: return "지금 상태"
+        case .router: return "승인·상태"
         case .connectors: return "CLI/API/MCP"
         case .analytics: return "토큰·비용"
         case .accounts: return "사용량·한도"
@@ -108,6 +111,7 @@ enum DashboardRoute: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "house"
         case .connectors: return "link"
+        case .router: return "point.topleft.down.curvedto.point.bottomright.up"
         case .analytics: return "chart.bar.xaxis"
         case .accounts: return "person.2"
         case .mascot: return "pawprint"
@@ -119,6 +123,7 @@ struct DashboardView: View {
     @ObservedObject var model: DashModel
     @ObservedObject var connections: ConnectionModel
     @ObservedObject var preferences: PreferencesModel
+    @ObservedObject var routerStore: RouterDecisionStore
     @State private var route: DashboardRoute = .home
 
     var body: some View {
@@ -140,10 +145,19 @@ struct DashboardView: View {
                 .background(.thinMaterial, in: Capsule()).padding(.top, 6) }
         }
         .onAppear {
+            if let requested = model.requestedRoute {
+                route = requested
+                model.requestedRoute = nil
+            }
             connections.refresh()
             model.refresh()
             model.refreshSystem()
             model.refreshLaunchAgent()
+        }
+        .onReceive(model.$requestedRoute) { requested in
+            guard let requested else { return }
+            route = requested
+            model.requestedRoute = nil
         }
         .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in model.refreshSystem() }
         .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in model.refreshLaunchAgent() }
@@ -218,6 +232,10 @@ struct DashboardView: View {
             OnboardingCard(preferences: preferences, connections: connections)
             summaryGrid
             ConnectionHealthStrip(model: connections)
+            RouterStatusStrip(store: routerStore) { route = .router }
+        case .router:
+            routeHeader("라우터 / 승인", "PUG Brain Router 결정과 DOOYOU 승인 상태를 봅니다.")
+            RouterDashboardSection(store: routerStore)
         case .connectors:
             routeHeader("커넥터", "다른 컴퓨터에서도 CLI, API, MCP를 자동 발견하거나 직접 추가합니다.")
             ConnectionHealthStrip(model: connections)

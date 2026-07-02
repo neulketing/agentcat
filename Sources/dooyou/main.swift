@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let popModel = PopModel()
     private let connectionModel = ConnectionModel()
     private let preferencesModel = PreferencesModel()
+    private let routerStore = RouterDecisionStore()
+    private var routerAPI: RouterAPI?
 
     private func updateStatusImage() {
         statusItem.button?.image = dooyouImage(frameIdx, isSprinting: isSprinting, mascot: preferencesModel.mascot, background: preferencesModel.backgroundTheme)
@@ -28,10 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.title = "DOOYOU"
         w.center()
         w.isReleasedWhenClosed = false
-        w.contentViewController = NSHostingController(rootView: DashboardView(model: dashModel, connections: connectionModel, preferences: preferencesModel))
+        w.contentViewController = NSHostingController(rootView: DashboardView(model: dashModel, connections: connectionModel, preferences: preferencesModel, routerStore: routerStore))
         dashWindow = w
         NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func openRouterDashboard() {
+        dashModel.requestedRoute = .router
+        openDashboard()
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -47,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         preferencesModel.didChange = { [weak self] in self?.updateStatusImage() }
         popover.behavior = .transient
+        routerAPI = RouterAPI(store: routerStore)
+        routerAPI?.start()
         refresh()
         startAnim()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.refresh() }
@@ -99,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let b = statusItem.button else { return }
         if popover.isShown { popover.performClose(nil); return }
         if popover.contentViewController == nil {   // build once; updates flow via popModel
-            let hc = NSHostingController(rootView: DashView(model: popModel, connections: connectionModel))
+            let hc = NSHostingController(rootView: DashView(model: popModel, connections: connectionModel, routerStore: routerStore))
             hc.sizingOptions = [.preferredContentSize]   // popover sizes to content, no clip/empty
             popover.contentViewController = hc
         }
@@ -136,6 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let cur = currentPowerMode()
             DispatchQueue.main.async { self?.popModel.powerMode = cur }
         }
+    }
+
+    func submitRouterApproval(routeId: String, approve: Bool) {
+        _ = routerAPI?.submitApproval(routeId: routeId, approve: approve)
     }
 }
 
@@ -174,6 +187,7 @@ func hudText(_ a: Account) -> Text? {
 struct DashView: View {
     @ObservedObject var model: PopModel
     @ObservedObject var connections: ConnectionModel
+    @ObservedObject var routerStore: RouterDecisionStore
     var snap: Snapshot { model.snap }
     var sys: SysStats { model.sys }
     var body: some View {
@@ -202,6 +216,9 @@ struct DashView: View {
             CoordinatorOverview(status: model.launchAgent)
             CompactConnectionSection(model: connections) {
                 (NSApp.delegate as? AppDelegate)?.openDashboard()
+            }
+            RouterStatusStrip(store: routerStore) {
+                (NSApp.delegate as? AppDelegate)?.openRouterDashboard()
             }
             SystemOverview(sys: sys)
             Divider()
@@ -426,6 +443,36 @@ if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "launch-status"
     exit(0)
 }
 
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "router-self-test" {
+    do {
+        try RouterAPISelfTest.run()
+        print("router-self-test ok")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("router-self-test failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "router-integration-self-test" {
+    do {
+        let out = try RouterIntegrationSelfTest.run(decisionPath: CommandLine.arguments[2])
+        print(out)
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("router-integration-self-test failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "router-ui-self-test" {
+    do {
+        try RouterUISelfTest.run()
+        print("router-ui-self-test ok")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("router-ui-self-test failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

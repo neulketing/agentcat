@@ -11,41 +11,79 @@
 // Headroom = 100 - max(used% across 5h / weekly / monthly). The binding window is
 // whichever is closest to its cap, so the account with the highest headroom is the
 // safest to route work to right now.
-import { readdirSync, readFileSync, statSync } from 'fs';
+//
+// Labels are the REAL logged-in account (email), resolved live from the config dir
+// — not a fixed slot name — so a fleet of machines (mine + beta testers') each
+// reports whose usage it actually is. `email`/`host` are in --json for aggregation.
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { hostname } from 'os';
 
-const DIR = join(process.env.HOME, '.dooyou', 'limits');
+const HOME = process.env.HOME;
+const DIR = join(HOME, '.dooyou', 'limits');
 const STALE_SEC = 12 * 3600;
 
-// filename (without .json) → { provider, label }
+// filename (without .json) → provider. Identity (email) is resolved live from the
+// config dir named by the key (e.g. key ".codex" → ~/.codex).
 const MAP = {
-  '.claude': { provider: 'claude', label: 'claude (default)' },
-  '.claude-account2': { provider: 'claude', label: 'claude-account2' },
-  '.codex': { provider: 'codex', label: 'codex (default)' },
-  '.codex-account2': { provider: 'codex', label: 'codex-account2' },
-  glm: { provider: 'glm', label: 'glm (neulketing)' },
+  '.claude': { provider: 'claude' },
+  '.claude-account2': { provider: 'claude' },
+  '.claude-account3': { provider: 'claude' },
+  '.codex': { provider: 'codex' },
+  '.codex-account2': { provider: 'codex' },
+  glm: { provider: 'glm' },
 };
+
+function jwtEmail(idToken) {
+  try {
+    const b = idToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(Buffer.from(b, 'base64').toString('utf8')).email || null;
+  } catch { return null; }
+}
+
+// Real account identity, read live from the config dir (key === config-dir name).
+function emailFor(key, provider) {
+  try {
+    if (provider === 'codex') {
+      const a = JSON.parse(readFileSync(join(HOME, key, 'auth.json'), 'utf8'));
+      return a.tokens?.id_token ? jwtEmail(a.tokens.id_token) : null;
+    }
+    if (provider === 'claude') {
+      for (const p of [join(HOME, key, '.claude.json'), join(HOME, '.claude.json')]) {
+        try {
+          const j = JSON.parse(readFileSync(p, 'utf8'));
+          if (j.oauthAccount?.emailAddress) return j.oauthAccount.emailAddress;
+        } catch { /* try next */ }
+      }
+      return null;
+    }
+    if (provider === 'glm') return 'neulketing';
+  } catch { /* fall through */ }
+  return null;
+}
 
 function load() {
   let files;
   try { files = readdirSync(DIR).filter((f) => f.endsWith('.json')); } catch { return []; }
   const now = Date.now() / 1000;
+  const host = hostname().replace(/\.local$/, '');
   const out = [];
   for (const f of files) {
     const key = f.replace(/\.json$/, '');
-    const meta = MAP[key] || { provider: 'unknown', label: key };
+    const meta = MAP[key] || { provider: 'unknown' };
     let d;
     try { d = JSON.parse(readFileSync(join(DIR, f), 'utf8')); } catch { continue; }
     const rl = d.rate_limits || {};
     const cap = d.captured_at || 0;
-    const w = (k) => (rl[k] && rl[k].used_percentage != null ? rl[k].used_percentage : null);
+    const w = (k) => (rl[k] && rl[k].used_percentage != null ? Math.round(rl[k].used_percentage) : null);
     const used = ['five_hour', 'seven_day', 'monthly'].map(w).filter((x) => x != null);
     if (!used.length) continue;
-    const maxUsed = Math.max(...used);
+    const email = emailFor(key, meta.provider);
     out.push({
-      key, provider: meta.provider, label: meta.label,
+      key, provider: meta.provider, email, host,
+      label: `${meta.provider} · ${email || key}`,
       five_hour: w('five_hour'), weekly: w('seven_day'), monthly: w('monthly'),
-      headroom: 100 - maxUsed,
+      headroom: 100 - Math.max(...used),
       stale: now - cap > STALE_SEC,
       age_min: Math.round((now - cap) / 60),
     });
@@ -68,10 +106,11 @@ if (args.includes('--best')) {
 } else {
   if (!rows.length) { console.error('no quota data (is dooyou running?)'); process.exit(1); }
   const pct = (v) => (v == null ? '  -' : String(v).padStart(3) + '%');
-  console.log('headroom  account            5h    wk    mo    age');
+  const labelW = Math.max(12, ...rows.map((r) => r.label.length));
+  console.log('headroom  ' + 'account'.padEnd(labelW) + '   5h    wk    mo    age');
   for (const r of rows) {
     console.log(
-      `${String(r.headroom).padStart(6)}%  ${r.label.padEnd(18)} ${pct(r.five_hour)} ${pct(r.weekly)} ${pct(r.monthly)}  ${r.stale ? `${r.age_min}m!` : `${r.age_min}m`}`,
+      `${String(r.headroom).padStart(6)}%  ${r.label.padEnd(labelW)} ${pct(r.five_hour)} ${pct(r.weekly)} ${pct(r.monthly)}  ${r.stale ? `${r.age_min}m!` : `${r.age_min}m`}`,
     );
   }
 }

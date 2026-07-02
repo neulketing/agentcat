@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+// dooyou fleet — one cross-machine view of the whole fleet (mine + beta testers').
+// Per machine it pulls, over Tailscale SSH (no daemon, no push infra):
+//   • headroom  — `quota --json`  (rate-limit room per account; shared accounts
+//                 share server-side, so this is for ROUTING)
+//   • usage     — `dooyou emit`   (tokens + $ spent ON that machine; per-machine
+//                 totals = per-tester ATTRIBUTION, so no separate account needed)
+//
+// Config: ~/.dooyou/fleet.json  (edit to add machines / label them)
+//   [ { "tester": "me",     "host": "macbook", "local": true },
+//     { "tester": "me",     "host": "mini",    "ssh": "osihwan@100.65.226.42" },
+//     { "tester": "석지현", "host": "jeonny",  "ssh": "apple@100.104.252.57" } ]
+//
+//   fleet            headroom + usage tables across the fleet
+//   fleet --json     merged raw rows per machine
+import { readFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { join } from 'path';
+
+const HOME = process.env.HOME;
+const CFG = join(HOME, '.dooyou', 'fleet.json');
+const QUOTA = join(HOME, '.dooyou', 'bin', 'quota');
+const DOOYOU = join(HOME, '.local', 'bin', 'dooyou');
+const TMP = '/tmp/dooyou-fleet-emit.json';
+const PATHPFX = 'PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"';
+const SSH = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10'];
+
+let fleet;
+try { fleet = JSON.parse(readFileSync(CFG, 'utf8')); }
+catch { console.error(`no fleet config at ${CFG}`); process.exit(1); }
+
+// One round trip per machine: quota headroom + usage emit, as one JSON envelope.
+function collect(node) {
+  if (node.local) {
+    let quota = null, usage = null;
+    try { quota = JSON.parse(execFileSync(QUOTA, ['--json'], { encoding: 'utf8' })); } catch {}
+    try { execFileSync(DOOYOU, ['emit', TMP], { stdio: 'ignore' }); usage = JSON.parse(readFileSync(TMP, 'utf8')); } catch {}
+    return { quota, usage };
+  }
+  try {
+    const cmd = `${PATHPFX}; Q=$(quota --json 2>/dev/null || echo null); dooyou emit ${TMP} >/dev/null 2>&1; U=$(cat ${TMP} 2>/dev/null || echo null); printf '{"quota":%s,"usage":%s}' "$Q" "$U"`;
+    return JSON.parse(execFileSync('ssh', [...SSH, node.ssh, cmd], { encoding: 'utf8', timeout: 60000 }));
+  } catch { return { quota: null, usage: null }; }
+}
+
+const data = fleet.map((n) => ({ node: n, ...collect(n) }));
+
+if (process.argv.includes('--json')) {
+  console.log(JSON.stringify(data.map((d) => ({ tester: d.node.tester, machine: d.node.host || '?', quota: d.quota, usage: d.usage }))));
+  process.exit(0);
+}
+
+// CJK-aware padding so Korean tester names align.
+const dw = (s) => [...String(s)].reduce((n, c) => n + (/[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(c) ? 2 : 1), 0);
+const pad = (s, w) => String(s) + ' '.repeat(Math.max(0, w - dw(s)));
+const padL = (s, w) => ' '.repeat(Math.max(0, w - dw(s))) + String(s);
+const pct = (v) => (v == null ? '  -' : String(v).padStart(3) + '%');
+const tok = (n) => (n >= 1e9 ? (n / 1e9).toFixed(2) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'k' : String(n || 0));
+const usd = (n) => '$' + (n >= 1000 ? Math.round(n) : (n || 0).toFixed(2));
+
+// ── headroom (routing) ──
+const hrows = [];
+for (const d of data) for (const r of d.quota || []) hrows.push({ tester: d.node.tester, machine: d.node.host || '?', ...r });
+hrows.sort((a, b) => b.headroom - a.headroom);
+if (hrows.length) {
+  const tW = Math.max(6, ...hrows.map((r) => dw(r.tester)));
+  const mW = Math.max(7, ...hrows.map((r) => dw(r.machine)));
+  const lW = Math.max(7, ...hrows.map((r) => dw(r.label)));
+  console.log('HEADROOM (routing)');
+  console.log(`  ${pad('tester', tW)}  ${pad('machine', mW)}  room  ${pad('account', lW)}   5h    wk    mo`);
+  for (const r of hrows) {
+    console.log(`  ${pad(r.tester, tW)}  ${pad(r.machine, mW)}  ${String(r.headroom).padStart(3)}%  ${pad(r.label, lW)} ${pct(r.five_hour)} ${pct(r.weekly)} ${pct(r.monthly)}${r.stale ? ' (stale)' : ''}`);
+  }
+}
+
+// ── usage (attribution) — per machine = per tester ──
+const urows = data.filter((d) => d.usage).map((d) => ({ tester: d.node.tester, machine: d.node.host || '?', ...d.usage }));
+urows.sort((a, b) => (b.weekCost || 0) - (a.weekCost || 0));
+if (urows.length) {
+  const tW = Math.max(6, ...urows.map((r) => dw(r.tester)));
+  const mW = Math.max(7, ...urows.map((r) => dw(r.machine)));
+  const totTokD = urows.reduce((s, r) => s + (r.today || 0), 0);
+  const totUsdD = urows.reduce((s, r) => s + (r.todayCost || 0), 0);
+  const totTokW = urows.reduce((s, r) => s + (r.week || 0), 0);
+  const totUsdW = urows.reduce((s, r) => s + (r.weekCost || 0), 0);
+  console.log('\nUSAGE (attribution)');
+  console.log(`  ${pad('tester', tW)}  ${pad('machine', mW)}  ${padL('today', 8)} ${padL('$', 8)}  ${padL('week', 8)} ${padL('$', 9)}`);
+  for (const r of urows) {
+    console.log(`  ${pad(r.tester, tW)}  ${pad(r.machine, mW)}  ${padL(tok(r.today), 8)} ${padL(usd(r.todayCost), 8)}  ${padL(tok(r.week), 8)} ${padL(usd(r.weekCost), 9)}`);
+  }
+  console.log(`  ${pad('TOTAL', tW)}  ${pad('', mW)}  ${padL(tok(totTokD), 8)} ${padL(usd(totUsdD), 8)}  ${padL(tok(totTokW), 8)} ${padL(usd(totUsdW), 9)}`);
+}
+
+// offline machines
+for (const d of data) if (!d.quota && !d.usage) console.log(`  ${d.node.tester} / ${d.node.host || '?'} — offline`);
