@@ -79,7 +79,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let tier = MotionTier.from(load: load)
                 if tier != self.motionTier {
                     self.motionTier = tier
-                    if tier == .rest { self.frameIdx = 0 }   // 거의 멈춤 — 서 있는 자세로
                     self.updateStatusImage()
                 }
                 let want = tier.frameInterval
@@ -98,8 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         animTimer?.invalidate()
         animTimer = Timer.scheduledTimer(withTimeInterval: animInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            // rest = 다리 정지(프레임 0 고정) — "거의 멈추듯". 그 외엔 사이클.
-            self.frameIdx = self.motionTier == .rest ? 0 : (self.frameIdx + 1) % dooyouFrames.count
+            // rest에서도 위상은 전진 — Cat.swift가 자세는 고정하고 위상으로 숨쉬기를 돌린다
+            self.frameIdx = (self.frameIdx + 1) % dooyouFrames.count
             self.updateStatusImage()
         }
     }

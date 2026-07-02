@@ -38,6 +38,25 @@ enum MotionTier: Int, Comparable {
         case .run: return "달리는 중"; case .sprint: return "전력 질주"; case .sweat: return "땀나게 일하는 중"
         }
     }
+
+    // ---- 모션그래픽 파라미터 (18px 기준 단위, 호출부에서 height/18 스케일) ----
+    // 상하 바운스 진폭 — 달릴수록 몸이 크게 튄다
+    var bobAmp: CGFloat {
+        switch self {
+        case .rest: return 0; case .walk: return 0.35; case .jog: return 0.6
+        case .run: return 0.95; case .sprint: return 1.25; case .sweat: return 1.45
+        }
+    }
+    // 전방 기울임(도) — 속도감의 핵심. 상체가 앞으로 쏠린다.
+    var lean: CGFloat {
+        switch self {
+        case .rest, .walk: return 0; case .jog: return 2
+        case .run: return 4; case .sprint: return 7; case .sweat: return 9
+        }
+    }
+    // 질주 시 수평 스트레치(스쿼시&스트레치) — 1.0 = 없음
+    var stretchX: CGFloat { self >= .sprint ? 1.05 : 1.0 }
+    var showDust: Bool { self >= .run }
 }
 
 private let dooyouFrameImages: [NSImage] = loadDooyouFrameImages()
@@ -81,7 +100,9 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, m
         return fallbackDooyouImage(frame, height: height, tier: tier, mascot: mascot, background: background)
     }
 
-    let sprite = dooyouFrameImages[frame % dooyouFrameImages.count]
+    let phase = ((frame % dooyouFrameImages.count) + dooyouFrameImages.count) % dooyouFrameImages.count
+    // rest = 서 있는 자세(프레임 0) + 숨쉬기. 그 외엔 다리 사이클.
+    let sprite = dooyouFrameImages[tier == .rest ? 0 : phase]
     let canvasWidth = background == .automatic ? height * 1.72 : height * 2.28
     let renderHeight = max(1, height - 2)
     let aspect = sprite.size.width / max(sprite.size.height, 1)
@@ -91,24 +112,45 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, m
         drawWidth = canvasWidth
         drawHeight = canvasWidth / max(aspect, 1)
     }
+    let unit = height / 18                                    // 18px 기준 스케일
+    // 상하 바운스 — 사이클 위상 테이블(뛰어오름→정점→접지→눌림), tier 진폭 곱
+    let bobTable: [CGFloat] = [0, 1.0, 0.15, -0.55]
+    let bob = tier == .rest ? 0 : bobTable[phase] * tier.bobAmp * unit
+    // 휴식 숨쉬기 — 몸통이 천천히 부풀었다 가라앉는다
+    let breath: CGFloat = tier == .rest ? [0, 0.014, 0.024, 0.014][phase] : 0
+    let stretchX = tier.stretchX
     let image = NSImage(size: NSSize(width: canvasWidth, height: height))
 
     image.lockFocus()
     NSGraphicsContext.current?.imageInterpolation = .high
     drawMenuBackground(theme: background, height: height, width: canvasWidth)
+    if tier.showDust {
+        drawDust(phase: phase, tier: tier, height: height, canvasWidth: canvasWidth)
+    }
+
+    let w = drawWidth * stretchX * (1 - breath * 0.4)
+    let h = drawHeight * (1 + breath) * (tier >= .sprint ? 0.975 : 1.0)   // 스트레치 시 살짝 낮게(스쿼시)
+    let x = (canvasWidth - w) / 2
+    let y = (height - h) / 2 + bob
+    NSGraphicsContext.saveGraphicsState()
+    if tier.lean != 0 {
+        // 전방(오른쪽 진행 방향) 기울임 — 몸 중심 기준 회전
+        let t = NSAffineTransform()
+        t.translateX(by: x + w / 2, yBy: y + h / 2)
+        t.rotate(byDegrees: tier.lean)
+        t.translateX(by: -(x + w / 2), yBy: -(y + h / 2))
+        t.concat()
+    }
     sprite.draw(
-        in: NSRect(
-            x: (canvasWidth - drawWidth) / 2,
-            y: (height - drawHeight) / 2,
-            width: drawWidth,
-            height: drawHeight
-        ),
+        in: NSRect(x: x, y: y, width: w, height: h),
         from: NSRect(origin: .zero, size: sprite.size),
         operation: .sourceOver,
         fraction: 1
     )
+    NSGraphicsContext.restoreGraphicsState()
+
     if tier >= .sprint {
-        drawSpeedLines(frame: frame, height: height, canvasWidth: canvasWidth)
+        drawSpeedLines(frame: frame, tier: tier, height: height, canvasWidth: canvasWidth)
     }
     if tier == .sweat {
         drawSweat(frame: frame, height: height, canvasWidth: canvasWidth)
@@ -164,27 +206,58 @@ private func menuBackgroundColors(_ theme: BackgroundThemeID) -> (NSColor, NSCol
     }
 }
 
-// 속도선 — 질주(sprint) 이상에서 몸 뒤로 흐르는 모션 라인. 프레임에 따라 흔들려 잔상처럼 보인다.
-private func drawSpeedLines(frame: Int, height: CGFloat, canvasWidth: CGFloat) {
+// 속도선 — 질주(sprint) 이상에서 몸 뒤로 흐르는 모션 라인.
+// 앞쪽은 진하고 꼬리로 갈수록 옅어지는 2단 테이퍼 + 프레임별 흔들림 = 잔상 느낌.
+private func drawSpeedLines(frame: Int, tier: MotionTier, height: CGFloat, canvasWidth: CGFloat) {
     let phase = CGFloat(frame % max(dooyouFrames.count, 1))
-    NSColor.white.withAlphaComponent(0.75).setStroke()
-    for (i, y) in [height * 0.32, height * 0.52, height * 0.70].enumerated() {
-        let jitter = (phase + CGFloat(i)).truncatingRemainder(dividingBy: 2) * 1.2
-        let len = height * (0.28 - CGFloat(i % 2) * 0.08)
-        let line = NSBezierPath()
-        line.move(to: NSPoint(x: 2.2 + jitter, y: y))
-        line.line(to: NSPoint(x: 2.2 + jitter + len, y: y))
-        line.lineWidth = 0.8
-        line.lineCapStyle = .round
-        line.stroke()
+    let boost: CGFloat = tier == .sweat ? 1.35 : 1.0          // 땀 단계는 더 길게
+    for (i, y) in [height * 0.30, height * 0.50, height * 0.68].enumerated() {
+        let jitter = (phase + CGFloat(i)).truncatingRemainder(dividingBy: 2) * 1.3
+        let len = height * (0.26 - CGFloat(i % 2) * 0.07) * boost
+        let x0 = 2.0 + jitter
+        // 앞부분(진함)
+        let head = NSBezierPath()
+        head.move(to: NSPoint(x: x0 + len * 0.45, y: y))
+        head.line(to: NSPoint(x: x0 + len, y: y))
+        NSColor.white.withAlphaComponent(0.8).setStroke()
+        head.lineWidth = 0.9
+        head.lineCapStyle = .round
+        head.stroke()
+        // 꼬리(옅음) — 테이퍼
+        let tail = NSBezierPath()
+        tail.move(to: NSPoint(x: x0, y: y))
+        tail.line(to: NSPoint(x: x0 + len * 0.45, y: y))
+        NSColor.white.withAlphaComponent(0.32).setStroke()
+        tail.lineWidth = 0.7
+        tail.lineCapStyle = .round
+        tail.stroke()
+    }
+}
+
+// 잔먼지 — run 이상에서 발밑 뒤로 이는 작은 흙먼지. 위상에 따라 흩어지며 옅어진다.
+private func drawDust(phase: Int, tier: MotionTier, height: CGFloat, canvasWidth: CGFloat) {
+    let unit = height / 18
+    let ground = 2.6 * unit
+    let intensity: CGFloat = tier >= .sprint ? 1.0 : 0.6
+    let drift = CGFloat(phase) * 0.9 * unit                    // 프레임마다 뒤로 흘러간다
+    let puffs: [(x: CGFloat, y: CGFloat, r: CGFloat, a: CGFloat)] = [
+        (4.5 * unit - drift * 0.4, ground + 0.4 * unit, 1.15 * unit, 0.34),
+        (7.0 * unit - drift,       ground + 1.1 * unit, 0.8 * unit, 0.22),
+        (5.6 * unit - drift * 0.7, ground - 0.2 * unit, 0.6 * unit, 0.18),
+    ]
+    for p in puffs where p.x > 1 {
+        NSColor.white.withAlphaComponent(p.a * intensity).setFill()
+        NSBezierPath(ovalIn: NSRect(x: p.x - p.r, y: p.y - p.r * 0.7, width: p.r * 2, height: p.r * 1.4)).fill()
     }
 }
 
 private func drawSweat(frame: Int, height: CGFloat, canvasWidth: CGFloat) {
     let phase = frame % max(dooyouFrames.count, 1)
+    // 위상에 따라 방울이 위→아래로 흘러내리며(fall) 좌우로 살짝 튄다 — 정지된 스티커 느낌 제거
+    let fall = CGFloat(phase) * 0.8
     let drops: [(CGFloat, CGFloat, CGFloat)] = [
-        (canvasWidth - 4.0 - CGFloat(phase % 2), height - 4.0, 1.45),
-        (canvasWidth - 8.5 - CGFloat((phase + 1) % 2), height - 7.0, 1.05),
+        (canvasWidth - 4.0 - CGFloat(phase % 2), height - 3.4 - fall, 1.45),
+        (canvasWidth - 8.5 - CGFloat((phase + 1) % 2), height - 6.2 - (3.2 - fall).truncatingRemainder(dividingBy: 3.2), 1.05),
     ]
     NSColor(red: 0.30, green: 0.74, blue: 1.0, alpha: 0.88).setFill()
     NSColor.white.withAlphaComponent(0.8).setStroke()
@@ -237,13 +310,29 @@ private func palette(for mascot: MascotID) -> MascotPalette {
 private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier, mascot: MascotID, background: BackgroundThemeID) -> NSImage {
     let width = background == .automatic ? height * 1.72 : height * 2.28
     let image = NSImage(size: NSSize(width: width, height: height))
-    let phase = frame % max(dooyouFrames.count, 1)
-    let hop = [0.0, 0.45, 0.0, -0.25][phase] * height / 18
+    // rest = 정지 자세(위상 0) + 숨쉬기 대신 미세한 바닥 안착. 그 외엔 사이클.
+    let rawPhase = frame % max(dooyouFrames.count, 1)
+    let phase = tier == .rest ? 0 : rawPhase
+    let unit = height / 18
+    // 코튼 스프라이트와 같은 바운스 테이블 — 마스코트 셋의 리듬을 통일
+    let hop = tier == .rest ? 0 : [0.0, 1.0, 0.15, -0.55][phase] * tier.bobAmp * unit
     let colors = palette(for: mascot)
 
     image.lockFocus()
     NSGraphicsContext.current?.shouldAntialias = true
     drawMenuBackground(theme: background, height: height, width: width)
+    if tier.showDust {
+        drawDust(phase: rawPhase, tier: tier, height: height, canvasWidth: width)
+    }
+
+    NSGraphicsContext.saveGraphicsState()
+    if tier.lean != 0 {
+        let t = NSAffineTransform()
+        t.translateX(by: width / 2, yBy: height / 2)
+        t.rotate(byDegrees: tier.lean)
+        t.translateX(by: -width / 2, yBy: -height / 2)
+        t.concat()
+    }
     switch mascot {
     case .cat:
         drawCatMascot(height: height, width: width, hop: hop, phase: phase, colors: colors)
@@ -252,8 +341,10 @@ private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier
     default:
         drawCapsuleMascot(height: height, width: width, hop: hop, colors: colors)
     }
+    NSGraphicsContext.restoreGraphicsState()
+
     if tier >= .sprint {
-        drawSpeedLines(frame: frame, height: height, canvasWidth: width)
+        drawSpeedLines(frame: frame, tier: tier, height: height, canvasWidth: width)
     }
     if tier == .sweat {
         drawSweat(frame: frame, height: height, canvasWidth: width)
