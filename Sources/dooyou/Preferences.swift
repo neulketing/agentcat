@@ -211,7 +211,7 @@ struct MascotPreview: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.22)) { timeline in
             let frame = Int(timeline.date.timeIntervalSinceReferenceDate / 0.22) % max(dooyouFrames.count, 1)
-            Image(nsImage: dooyouImage(frame, height: height, isSprinting: false, mascot: mascot, background: background))
+            Image(nsImage: dooyouImage(frame, height: height, tier: .walk, mascot: mascot, background: background))
                 .resizable()
                 .scaledToFit()
         }

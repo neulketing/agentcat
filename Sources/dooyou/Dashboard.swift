@@ -307,7 +307,7 @@ struct DashboardView: View {
 
     private var heroBand: some View {
         HStack(spacing: 18) {
-            Image(nsImage: dooyouImage(1, height: 48, isSprinting: snap.activeAgents > 0, mascot: preferences.mascot, background: preferences.backgroundTheme))
+            Image(nsImage: dooyouImage(1, height: 48, tier: snap.activeAgents > 0 ? .run : .rest, mascot: preferences.mascot, background: preferences.backgroundTheme))
                 .resizable()
                 .scaledToFit()
                 .frame(width: 76, height: 56)

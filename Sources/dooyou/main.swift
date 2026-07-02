@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var frameIdx = 0
     private var animTimer: Timer?
     private var animInterval = 0.45        // current frame interval (idle stroll)
-    private var isSprinting = false
+    private var motionTier: MotionTier = .walk
     private var dashWindow: NSWindow?
     private let dashModel = DashModel()
     private let popModel = PopModel()
@@ -19,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var routerAPI: RouterAPI?
 
     private func updateStatusImage() {
-        statusItem.button?.image = dooyouImage(frameIdx, isSprinting: isSprinting, mascot: preferencesModel.mascot, background: preferencesModel.backgroundTheme)
+        statusItem.button?.image = dooyouImage(frameIdx, tier: motionTier, mascot: preferencesModel.mascot, background: preferencesModel.backgroundTheme)
     }
 
     @objc func openDashboard() {
@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)   // menu-bar only, no dock icon
         statusItem = NSStatusBar.system.statusItem(withLength: statusItemLength)
         if let b = statusItem.button {
-            b.image = dooyouImage(0, isSprinting: false, mascot: preferencesModel.mascot, background: preferencesModel.backgroundTheme)
+            b.image = dooyouImage(0, tier: .rest, mascot: preferencesModel.mascot, background: preferencesModel.backgroundTheme)
             b.imagePosition = .imageLeading
             b.imageScaling = .scaleProportionallyDown
             b.action = #selector(togglePopover)
@@ -69,8 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func speed(load: Double) -> Double { max(0.05, 0.5 - load / 100 * 0.45) }
-
     private func sampleStats() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let s = sampleSys()
@@ -78,12 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.popModel.sys = s
                 let load = max(s.cpu, s.memPct > 85 ? s.memPct : 0)   // CPU, or memory when under pressure
-                let want = self.speed(load: load)
-                let sprinting = want <= 0.18
-                if sprinting != self.isSprinting {
-                    self.isSprinting = sprinting
+                let tier = MotionTier.from(load: load)
+                if tier != self.motionTier {
+                    self.motionTier = tier
+                    if tier == .rest { self.frameIdx = 0 }   // 거의 멈춤 — 서 있는 자세로
                     self.updateStatusImage()
                 }
+                let want = tier.frameInterval
                 if abs(want - self.animInterval) > 0.002 { self.animInterval = want; self.startAnim() }
             }
         }
@@ -99,7 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         animTimer?.invalidate()
         animTimer = Timer.scheduledTimer(withTimeInterval: animInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.frameIdx = (self.frameIdx + 1) % dooyouFrames.count
+            // rest = 다리 정지(프레임 0 고정) — "거의 멈추듯". 그 외엔 사이클.
+            self.frameIdx = self.motionTier == .rest ? 0 : (self.frameIdx + 1) % dooyouFrames.count
             self.updateStatusImage()
         }
     }

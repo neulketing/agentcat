@@ -2,6 +2,44 @@ import Cocoa
 
 let dooyouFrames = [0, 1, 2, 3]
 
+// 시스템 부하(CPU, 압박 시 MEM) → 6단계 모션.
+// 거의 멈춤(rest) → 느리게 걷기(walk) → 가볍게 달리기(jog) → 조금 빨리(run)
+// → 엄청 빨리(sprint, 속도선) → 땀나기(sweat, 속도선+땀방울)
+enum MotionTier: Int, Comparable {
+    case rest = 0, walk, jog, run, sprint, sweat
+    static func < (a: MotionTier, b: MotionTier) -> Bool { a.rawValue < b.rawValue }
+
+    static func from(load: Double) -> MotionTier {
+        switch load {
+        case ..<10: return .rest
+        case ..<30: return .walk
+        case ..<50: return .jog
+        case ..<70: return .run
+        case ..<85: return .sprint
+        default:    return .sweat
+        }
+    }
+
+    // 프레임 간격(초) — 단계가 오를수록 다리가 빨라진다. rest는 프레임 정지(호출자가 frame 0 고정).
+    var frameInterval: Double {
+        switch self {
+        case .rest:   return 0.9
+        case .walk:   return 0.55
+        case .jog:    return 0.36
+        case .run:    return 0.22
+        case .sprint: return 0.12
+        case .sweat:  return 0.07
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .rest: return "휴식"; case .walk: return "걷는 중"; case .jog: return "가볍게 달리는 중"
+        case .run: return "달리는 중"; case .sprint: return "전력 질주"; case .sweat: return "땀나게 일하는 중"
+        }
+    }
+}
+
 private let dooyouFrameImages: [NSImage] = loadDooyouFrameImages()
 
 private func loadDooyouFrameImages() -> [NSImage] {
@@ -38,9 +76,9 @@ private func candidateResourceURLs(named name: String, extension ext: String) ->
     return urls
 }
 
-func dooyouImage(_ frame: Int, height: CGFloat = 18, isSprinting: Bool = false, mascot: MascotID = .coton, background: BackgroundThemeID = .automatic) -> NSImage {
+func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, mascot: MascotID = .coton, background: BackgroundThemeID = .automatic) -> NSImage {
     guard mascot == .coton, !dooyouFrameImages.isEmpty else {
-        return fallbackDooyouImage(frame, height: height, isSprinting: isSprinting, mascot: mascot, background: background)
+        return fallbackDooyouImage(frame, height: height, tier: tier, mascot: mascot, background: background)
     }
 
     let sprite = dooyouFrameImages[frame % dooyouFrameImages.count]
@@ -69,7 +107,10 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, isSprinting: Bool = false, 
         operation: .sourceOver,
         fraction: 1
     )
-    if isSprinting {
+    if tier >= .sprint {
+        drawSpeedLines(frame: frame, height: height, canvasWidth: canvasWidth)
+    }
+    if tier == .sweat {
         drawSweat(frame: frame, height: height, canvasWidth: canvasWidth)
     }
     image.unlockFocus()
@@ -120,6 +161,22 @@ private func menuBackgroundColors(_ theme: BackgroundThemeID) -> (NSColor, NSCol
             NSColor(red: 0.04, green: 0.05, blue: 0.09, alpha: 0.92),
             NSColor(red: 0.55, green: 0.62, blue: 0.78, alpha: 0.60)
         )
+    }
+}
+
+// 속도선 — 질주(sprint) 이상에서 몸 뒤로 흐르는 모션 라인. 프레임에 따라 흔들려 잔상처럼 보인다.
+private func drawSpeedLines(frame: Int, height: CGFloat, canvasWidth: CGFloat) {
+    let phase = CGFloat(frame % max(dooyouFrames.count, 1))
+    NSColor.white.withAlphaComponent(0.75).setStroke()
+    for (i, y) in [height * 0.32, height * 0.52, height * 0.70].enumerated() {
+        let jitter = (phase + CGFloat(i)).truncatingRemainder(dividingBy: 2) * 1.2
+        let len = height * (0.28 - CGFloat(i % 2) * 0.08)
+        let line = NSBezierPath()
+        line.move(to: NSPoint(x: 2.2 + jitter, y: y))
+        line.line(to: NSPoint(x: 2.2 + jitter + len, y: y))
+        line.lineWidth = 0.8
+        line.lineCapStyle = .round
+        line.stroke()
     }
 }
 
@@ -177,7 +234,7 @@ private func palette(for mascot: MascotID) -> MascotPalette {
     }
 }
 
-private func fallbackDooyouImage(_ frame: Int, height: CGFloat, isSprinting: Bool, mascot: MascotID, background: BackgroundThemeID) -> NSImage {
+private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier, mascot: MascotID, background: BackgroundThemeID) -> NSImage {
     let width = background == .automatic ? height * 1.72 : height * 2.28
     let image = NSImage(size: NSSize(width: width, height: height))
     let phase = frame % max(dooyouFrames.count, 1)
@@ -195,7 +252,10 @@ private func fallbackDooyouImage(_ frame: Int, height: CGFloat, isSprinting: Boo
     default:
         drawCapsuleMascot(height: height, width: width, hop: hop, colors: colors)
     }
-    if isSprinting {
+    if tier >= .sprint {
+        drawSpeedLines(frame: frame, height: height, canvasWidth: width)
+    }
+    if tier == .sweat {
         drawSweat(frame: frame, height: height, canvasWidth: width)
     }
 
