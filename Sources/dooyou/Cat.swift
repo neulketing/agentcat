@@ -59,19 +59,25 @@ enum MotionTier: Int, Comparable {
     var showDust: Bool { self >= .run }
 }
 
-private let dooyouFrameImages: [NSImage] = loadDooyouFrameImages()
-
-private func loadDooyouFrameImages() -> [NSImage] {
-    dooyouFrames.compactMap { frame in
-        for url in candidateResourceURLs(named: "dooyou-run-\(frame)", extension: "png") {
-            if let image = NSImage(contentsOf: url) {
-                image.isTemplate = false
-                return image
+// 마스코트별 스프라이트 (4프레임 달리기 사이클). 전 프레임이 있어야 스프라이트 경로,
+// 아니면 벡터 폴백. cat/turtle 스프라이트는 dooyou 프레임을 레퍼런스로 image_gen 생성 (2026-07-02).
+private let mascotFrameImages: [MascotID: [NSImage]] = {
+    let prefixes: [MascotID: String] = [.coton: "dooyou-run", .cat: "cat-run", .turtle: "turtle-run"]
+    var out: [MascotID: [NSImage]] = [:]
+    for (mascot, prefix) in prefixes {
+        let frames = dooyouFrames.compactMap { frame -> NSImage? in
+            for url in candidateResourceURLs(named: "\(prefix)-\(frame)", extension: "png") {
+                if let image = NSImage(contentsOf: url) {
+                    image.isTemplate = false
+                    return image
+                }
             }
+            return nil
         }
-        return nil
+        if frames.count == dooyouFrames.count { out[mascot] = frames }
     }
-}
+    return out
+}()
 
 private func candidateResourceURLs(named name: String, extension ext: String) -> [URL] {
     let bundleNames = ["dooyou_dooyou.bundle", "agentcat_agentcat.bundle"]
@@ -96,13 +102,13 @@ private func candidateResourceURLs(named name: String, extension ext: String) ->
 }
 
 func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, mascot: MascotID = .coton, background: BackgroundThemeID = .automatic) -> NSImage {
-    guard mascot == .coton, !dooyouFrameImages.isEmpty else {
+    guard let spriteFrames = mascotFrameImages[mascot], !spriteFrames.isEmpty else {
         return fallbackDooyouImage(frame, height: height, tier: tier, mascot: mascot, background: background)
     }
 
-    let phase = ((frame % dooyouFrameImages.count) + dooyouFrameImages.count) % dooyouFrameImages.count
+    let phase = ((frame % spriteFrames.count) + spriteFrames.count) % spriteFrames.count
     // rest = 서 있는 자세(프레임 0) + 숨쉬기. 그 외엔 다리 사이클.
-    let sprite = dooyouFrameImages[tier == .rest ? 0 : phase]
+    let sprite = spriteFrames[tier == .rest ? 0 : phase]
     let canvasWidth = background == .automatic ? height * 1.72 : height * 2.28
     let renderHeight = max(1, height - 2)
     let aspect = sprite.size.width / max(sprite.size.height, 1)
