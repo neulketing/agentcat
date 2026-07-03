@@ -1,3 +1,12 @@
+# ⚠️ RETIRED (2026-07-03) — 정본은 DOOYOU 모노레포
+
+이 스탠드얼론 레포는 2026-07-03 `~/Code/dooyou/app/`(DOOYOU-core 모노레포)으로 **완전 합류**했다.
+분기분(DispatchFeed·마스코트 스프라이트·소진 ETA·밀도 조정·--install 배포) 전부 f6c939d로 흡수 완료.
+
+**여기에 커밋하지 말 것** — 앱 빌드·배포는 `~/Code/dooyou/app/script/build_and_run.sh --install` 하나만 사용.
+
+---
+
 # DOOYOU
 
 Tiny macOS menu bar monitor with a running mascot for local AI-agent activity.
