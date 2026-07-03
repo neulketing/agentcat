@@ -17,8 +17,15 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$PACKAGE_PRODUCT"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
+LAUNCH_LABEL="local.dooyou"
+LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
+GUI_DOMAIN="gui/$(id -u)"
+
 cd "$ROOT_DIR"
 if [[ "$MODE" != "--build-only" && "$MODE" != "build-only" ]]; then
+  # KeepAlive 런치에이전트가 있으면 먼저 bootout — 안 하면 pkill 순간 launchd가 되살려
+  # open -n과 합쳐 2중 인스턴스가 된다 (2026-07-03 실사고: 메뉴바 두유 2개).
+  launchctl bootout "$GUI_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1 || true
   pkill -x "$PROCESS_NAME" >/dev/null 2>&1 || true
   pkill -x agentcat >/dev/null 2>&1 || true
 fi
@@ -66,11 +73,24 @@ PLIST
 codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  # 런치에이전트가 설치돼 있으면 launchd 관리 인스턴스로 단일화(bootstrap이 RunAtLoad 기동).
+  # open -n은 강제 새 인스턴스라 KeepAlive와 만나면 2중 실행이 된다.
+  if [[ -f "$LAUNCH_PLIST" ]]; then
+    launchctl bootstrap "$GUI_DOMAIN" "$LAUNCH_PLIST" 2>/dev/null \
+      || launchctl kickstart -k "$GUI_DOMAIN/$LAUNCH_LABEL"
+  else
+    /usr/bin/open -n "$APP_BUNDLE"
+  fi
 }
 
 case "$MODE" in
   --build-only|build-only)
+    ;;
+  --install|install)
+    # 정식 배포 경로: dist → /Applications 교체 후 launchd 관리 인스턴스 재기동.
+    rm -rf "/Applications/$APP_NAME.app"
+    cp -R "$APP_BUNDLE" /Applications/
+    open_app
     ;;
   run)
     open_app
@@ -92,7 +112,7 @@ case "$MODE" in
     pgrep -x "$PROCESS_NAME" >/dev/null
     ;;
   *)
-    echo "usage: $0 [run|--build-only|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|--install|--build-only|--debug|--logs|--telemetry|--verify]" >&2
     exit 2
     ;;
 esac
