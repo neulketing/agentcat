@@ -230,29 +230,35 @@ struct DashView: View {
             }
             SystemOverview(sys: sys)
             Divider()
-            HStack { Text("합계 · 오늘").bold(); Spacer(); Text(eok(snap.today)).bold() }
-            HStack { Text("합계 · 7일").foregroundStyle(.secondary); Spacer(); Text(eok(snap.week)).foregroundStyle(.secondary) }
-            HStack { Text("API 환산 · 오늘").font(.subheadline); Spacer(); Text(usd(snap.todayCost)).font(.subheadline).foregroundStyle(.green) }
-            HStack { Text("API 환산 · 7일").font(.caption).foregroundStyle(.secondary); Spacer(); Text(usd(snap.weekCost)).font(.caption).foregroundStyle(.secondary) }
+            // 밀도 조정(2026-07-03): 합계 4줄→2줄(합계+API환산 병합), 계정당 4~5줄→2줄.
+            // 계정별 $ 상세·이메일 전체는 대시보드 담당 — 팝오버는 한도·오늘이 본체.
+            HStack { Text("오늘").bold(); Spacer()
+                Text(eok(snap.today)).bold().monospacedDigit()
+                Text(usd(snap.todayCost)).font(.subheadline).foregroundStyle(.green).monospacedDigit() }
+            HStack { Text("7일").font(.caption).foregroundStyle(.secondary); Spacer()
+                Text("\(eok(snap.week)) · \(usd(snap.weekCost))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             Divider()
             ForEach(snap.accounts) { a in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .trailing, spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(a.name).font(.callout)
-                        if let e = a.email { Text(e).font(.caption2).foregroundStyle(.secondary) }
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("오늘 \(eok(a.today)) · \(usd(a.todayCost))").font(.caption)
-                        Text("7일 \(eok(a.week)) · \(usd(a.weekCost))").font(.caption2).foregroundStyle(.secondary)
-                        if let hud = hudText(a) { hud.font(.caption2) }
-                        if let eta = model.burnEta[a.name] {
-                            Text("이 속도면 \(eta.window) 소진까지 ~\(fmtEtaMin(eta.minutes))")
-                                .font(.caption2)
-                                .foregroundColor(eta.minutes <= 30 ? .red : .orange)
+                        if let e = a.email {
+                            Text(e).font(.caption2).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
                         }
+                        Spacer(minLength: 8)
+                        if let hud = hudText(a) { hud.font(.caption2) }
+                    }
+                    if let eta = model.burnEta[a.name] {
+                        Text("이 속도면 \(eta.window) 소진까지 ~\(fmtEtaMin(eta.minutes))")
+                            .font(.caption2)
+                            .foregroundColor(eta.minutes <= 30 ? .red : .orange)
+                    } else {
+                        Text("오늘 \(eok(a.today)) · 7일 \(eok(a.week))")
+                            .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
                     }
                 }
+                .help("오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))")
             }
             Divider()
             Button { (NSApp.delegate as? AppDelegate)?.openDashboard() } label: {
@@ -322,49 +328,25 @@ struct CoordinatorOverview: View {
 struct SystemOverview: View {
     let sys: SysStats
 
+    // 팝오버 밀도 조정(2026-07-03): 바 2줄+칩 3개 → 요약 1줄. 상세는 대시보드가 담당.
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text("시스템").font(.headline)
-                Spacer()
-                Text(systemSummary)
-                    .font(.caption2)
-                    .foregroundStyle(summaryColor)
-            }
-            SystemLoadRow(
-                label: "CPU",
-                value: "\(Int(sys.cpu.rounded()))%",
-                detail: "실시간",
-                pct: sys.cpu
-            )
-            SystemLoadRow(
-                label: "메모리",
-                value: "\(Int(sys.memPct.rounded()))%",
-                detail: String(format: "%.1f/%.0fGB", sys.memUsed, sys.memTotal),
-                pct: sys.memPct
-            )
-            HStack(spacing: 8) {
-                ResourceChip(
-                    label: "SSD 여유",
-                    value: String(format: "%.0fGB", sys.diskFreeGB),
-                    color: sys.diskFreeGB < 25 ? DooyouStyle.warning : .primary
-                )
-                ResourceChip(
-                    label: "NET",
-                    value: "↓\(rate(sys.netDownBytesPerSec)) ↑\(rate(sys.netUpBytesPerSec))",
-                    color: DooyouStyle.info
-                )
-                ResourceChip(
-                    label: "메모리 스왑",
-                    value: sys.swap < 0.05 ? "0" : String(format: "%.1fGB", sys.swap),
-                    color: sys.swap >= 1 ? DooyouStyle.warning : .primary
-                )
-                .help("RAM이 부족할 때 macOS가 디스크로 밀어낸 임시 메모리입니다.")
-            }
+        HStack(spacing: 6) {
+            Text("시스템").font(.subheadline).bold()
+            Spacer()
+            (Text("CPU ") + Text("\(Int(sys.cpu.rounded()))%").foregroundColor(loadColor(sys.cpu))
+             + Text("  메모리 ") + Text("\(Int(sys.memPct.rounded()))%").foregroundColor(loadColor(sys.memPct))
+             + Text("  SSD \(String(format: "%.0f", sys.diskFreeGB))G").foregroundColor(sys.diskFreeGB < 25 ? DooyouStyle.warning : .secondary)
+             + (sys.swap >= 0.05 ? Text("  스왑 \(String(format: "%.1f", sys.swap))G").foregroundColor(sys.swap >= 1 ? DooyouStyle.warning : .secondary) : Text(""))
+             + Text("  ↓\(rate(sys.netDownBytesPerSec))↑\(rate(sys.netUpBytesPerSec))").foregroundColor(.secondary))
+                .font(.caption2).monospacedDigit()
+            Text(systemSummary)
+                .font(.caption2)
+                .foregroundStyle(summaryColor)
         }
-        .padding(12)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .background(DooyouStyle.surfaceElevated.opacity(0.78), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+        .help("상세 그래프는 대시보드에서")
     }
 
     private var maxPressure: Double { max(sys.cpu, sys.memPct, sys.swap >= 1 ? 75 : 0) }
@@ -374,41 +356,6 @@ struct SystemOverview: View {
         return "여유"
     }
     private var summaryColor: Color { loadColor(maxPressure) }
-}
-
-struct SystemLoadRow: View {
-    let label: String
-    let value: String
-    let detail: String
-    let pct: Double
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .leading)
-                Text(value)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(loadColor(pct))
-                    .frame(width: 48, alignment: .leading)
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Spacer()
-                Text(pressureWord(pct))
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(loadColor(pct))
-            }
-            MiniProgressBar(value: pct / 100, color: loadColor(pct))
-        }
-        .padding(.vertical, 2)
-    }
 }
 
 func rate(_ bytesPerSec: Double) -> String {
