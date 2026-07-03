@@ -246,3 +246,61 @@ struct ROIPanel: View {
         }
     }
 }
+
+// ---- 승인 대기 피드 — exec 게이트가 남기는 ~/.dooyou/gate/*.jsonl의 뷰 ----
+// JS pendingRequests()와 동일 규칙: requests − approved − rejected, 최근 24h.
+// (앱이 read-only로 미러 — 승인 행위는 텔레그램 원탭 또는 `dooyou gate approve`가 담당.)
+struct PendingApproval: Identifiable {
+    let id: String
+    let preview: String
+    let ts: Date
+}
+
+private func gateLines(_ file: String) -> [[String: Any]] {
+    let path = NSHomeDirectory() + "/.dooyou/gate/" + file
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    return text.split(separator: "\n").compactMap {
+        guard let d = $0.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }
+}
+
+func loadPendingApprovals() -> [PendingApproval] {
+    let approved = Set(gateLines("approvals.jsonl").compactMap { $0["requestId"] as? String })
+    let rejected = Set(gateLines("approval-decisions.jsonl")
+        .filter { ($0["decision"] as? String) == "reject" }.compactMap { $0["requestId"] as? String })
+    let cutoff = Date().timeIntervalSince1970 - 86400
+    return gateLines("requests.jsonl").compactMap { o -> PendingApproval? in
+        guard let id = o["id"] as? String,
+              let ts = (o["ts"] as? NSNumber)?.doubleValue, ts > cutoff,
+              !approved.contains(id), !rejected.contains(id) else { return nil }
+        return PendingApproval(id: id, preview: (o["preview"] as? String) ?? id,
+                               ts: Date(timeIntervalSince1970: ts))
+    }.reversed()
+}
+
+// 팝오버 승인 대기 스트립: 대기 N건 + 최신 프리뷰. >0일 때만 렌더.
+struct PendingApprovalStrip: View {
+    let pending: [PendingApproval]
+    var openDashboard: () -> Void
+    var body: some View {
+        if !pending.isEmpty {
+            Button(action: openDashboard) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.shield.fill").foregroundStyle(DooyouStyle.warning)
+                    Text("승인 대기 \(pending.count)건").font(.caption).bold()
+                    if let top = pending.first {
+                        Text(top.preview).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer()
+                    Text("텔레그램 원탭").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(DooyouStyle.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .help(pending.map { "· \($0.preview)" }.joined(separator: "\n"))
+        }
+    }
+}

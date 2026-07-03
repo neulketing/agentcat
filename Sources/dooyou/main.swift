@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let pm = currentPowerMode()
             let launchAgent = sampleLaunchAgent()
             let dispatch = loadDispatchLog()
+            let pending = loadPendingApprovals()
             let etas = BurnMonitor.shared.record(s.accounts)
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -129,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.popModel.powerMode = pm
                 self.popModel.launchAgent = launchAgent
                 self.popModel.dispatch = dispatch
+                self.popModel.pending = pending
                 self.popModel.burnEta = etas
                 self.statusItem.button?.title = " " + eok(s.today)
             }
@@ -161,6 +163,7 @@ final class PopModel: ObservableObject {
     @Published var sys = SysStats()
     @Published var launchAgent = LaunchAgentStatus()
     @Published var dispatch: [DispatchEntry] = []
+    @Published var pending: [PendingApproval] = []    // exec 게이트 승인 대기 (텔레그램 원탭 대상)
     @Published var burnEta: [String: BurnEta] = [:]   // 계정명 → 구속 창 소진 ETA (제일 먼저 바닥나는 창)
 }
 
@@ -226,6 +229,9 @@ struct DashView: View {
                 (NSApp.delegate as? AppDelegate)?.openRouterDashboard()
             }
             DispatchStrip(entries: model.dispatch) {
+                (NSApp.delegate as? AppDelegate)?.openDashboard()
+            }
+            PendingApprovalStrip(pending: model.pending) {
                 (NSApp.delegate as? AppDelegate)?.openDashboard()
             }
             SystemOverview(sys: sys)
