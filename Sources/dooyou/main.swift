@@ -161,7 +161,7 @@ final class PopModel: ObservableObject {
     @Published var sys = SysStats()
     @Published var launchAgent = LaunchAgentStatus()
     @Published var dispatch: [DispatchEntry] = []
-    @Published var burnEta: [String: Int] = [:]   // 계정명 → 5h 소진 ETA(분)
+    @Published var burnEta: [String: BurnEta] = [:]   // 계정명 → 구속 창 소진 ETA (제일 먼저 바닥나는 창)
 }
 
 func powerIcon(_ mode: String) -> String {
@@ -247,9 +247,9 @@ struct DashView: View {
                         Text("7일 \(eok(a.week)) · \(usd(a.weekCost))").font(.caption2).foregroundStyle(.secondary)
                         if let hud = hudText(a) { hud.font(.caption2) }
                         if let eta = model.burnEta[a.name] {
-                            Text("이 속도면 5h 소진까지 ~\(eta)분")
+                            Text("이 속도면 \(eta.window) 소진까지 ~\(fmtEtaMin(eta.minutes))")
                                 .font(.caption2)
-                                .foregroundColor(eta <= 30 ? .red : .orange)
+                                .foregroundColor(eta.minutes <= 30 ? .red : .orange)
                         }
                     }
                 }

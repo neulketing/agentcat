@@ -142,6 +142,14 @@ func price(_ model: String) -> Price? {
     return priceTable[base] ?? priceTable[base.lowercased()]
 }
 
+// 소진 ETA 분 표기 — 짧으면 "294분", 길면(≥2h) "8h34m" (wk/mo 창 ETA는 시간 단위가 자연스러움)
+func fmtEtaMin(_ m: Int) -> String {
+    if m < 120 { return "\(m)분" }
+    let days = m / 1440, hours = (m % 1440) / 60, mins = m % 60
+    if days > 0 { return "\(days)d\(hours)h" }
+    return "\(hours)h\(mins)m"
+}
+
 // "4h38m" / "2d21h" / "12m" — OMC-style reset countdown.
 func countdown(_ d: Date) -> String {
     let s = Int(d.timeIntervalSinceNow)

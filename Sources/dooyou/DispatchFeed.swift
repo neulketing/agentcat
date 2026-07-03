@@ -129,44 +129,64 @@ struct DispatchSection: View {
     }
 }
 
-// ---- 번레이트 모니터 — 5h 창 소진 예측 + 90% 임계 알림 ----
+// ---- 번레이트 모니터 — 구속(binding) 창 소진 예측 + 90% 임계 알림 ----
+// 기준 = "제일 먼저 바닥나는 창" (2026-07-03, 5h 고정 기준 폐지 — wk 97%가 5h 41%보다
+// 급한데 5h만 경고하던 문제). 각 창(5h/wk/mo)별 기울기로 소진 ETA를 구하되,
+// **리셋이 소진보다 먼저 오는 창은 위기가 아니므로 제외**하고 남은 창 중 가장 이른 것을 보고.
+
+struct BurnEta { let window: String; let minutes: Int }
 
 final class BurnMonitor {
     static let shared = BurnMonitor()
-    private var history: [String: [(ts: Date, pct: Int)]] = [:]
+    private var history: [String: [(ts: Date, pct: Int)]] = [:]   // "계정|창" → 관측
     private var notified = Set<String>()
     private let queue = DispatchQueue(label: "dooyou.burn")
 
-    // 매 refresh(30s)마다 호출. 관측 축적 + 임계 알림 + 계정별 소진 ETA(분) 반환.
-    func record(_ accounts: [Account]) -> [String: Int] {
+    // 매 refresh(30s)마다 호출. 관측 축적 + 임계 알림 + 계정별 구속 창 ETA 반환.
+    func record(_ accounts: [Account]) -> [String: BurnEta] {
         queue.sync {
-            var etas: [String: Int] = [:]
+            var etas: [String: BurnEta] = [:]
             let now = Date()
             for a in accounts {
-                guard let pct = a.fiveHourPct else { continue }
-                var h = history[a.name] ?? []
-                // 창 리셋(퍼센트 하락) 감지 시 히스토리 초기화 — 리셋 직후 음의 기울기 방지
-                if let last = h.last, pct < last.pct - 5 { h = [] }
-                h.append((now, pct))
-                h.removeAll { $0.ts < now.addingTimeInterval(-3600) }   // 최근 1h만
-                history[a.name] = h
+                let windows: [(name: String, pct: Int?, reset: Date?)] = [
+                    ("5h", a.fiveHourPct, a.fiveHourResetsAt),
+                    ("wk", a.weeklyPct, a.weeklyResetsAt),
+                    ("mo", a.monthlyPct, a.monthlyResetsAt)]
+                var best: BurnEta? = nil
+                for w in windows {
+                    guard let pct = w.pct else { continue }
+                    let key = "\(a.name)|\(w.name)"
+                    var h = history[key] ?? []
+                    // 창 리셋(퍼센트 하락) 감지 시 히스토리 초기화 — 리셋 직후 음의 기울기 방지
+                    if let last = h.last, pct < last.pct - 5 { h = [] }
+                    h.append((now, pct))
+                    // 느린 창(wk/mo)은 기울기가 완만해 관측 창을 6h로 넓힘
+                    let span: Double = w.name == "5h" ? 3600 : 6 * 3600
+                    h.removeAll { $0.ts < now.addingTimeInterval(-span) }
+                    history[key] = h
 
-                if pct >= 90, pct < 100 {
-                    let key = "\(a.name)-\(Int(a.fiveHourResetsAt?.timeIntervalSince1970 ?? 0))"
-                    if !notified.contains(key) {
-                        notified.insert(key)
-                        notify("\(a.name) 5h 창 \(pct)% — 소진 임박",
-                               body: a.fiveHourResetsAt.map { "리셋까지 \(countdown($0))" } ?? "")
+                    if pct >= 90, pct < 100 {
+                        let nkey = "\(a.name)-\(w.name)-\(Int(w.reset?.timeIntervalSince1970 ?? 0))"
+                        if !notified.contains(nkey) {
+                            notified.insert(nkey)
+                            notify("\(a.name) \(w.name) 창 \(pct)% — 소진 임박",
+                                   body: w.reset.map { "리셋까지 \(countdown($0))" } ?? "")
+                        }
                     }
-                }
 
-                // 기울기: 최근 1h 창에서 ≥10분 간격 관측 2개 이상일 때만
-                guard pct < 100, let first = h.first, h.count >= 2,
-                      now.timeIntervalSince(first.ts) >= 600 else { continue }
-                let hours = now.timeIntervalSince(first.ts) / 3600
-                let slope = Double(pct - first.pct) / hours          // %/h
-                guard slope >= 3 else { continue }                    // 유의미한 소진 속도만
-                etas[a.name] = Int(Double(100 - pct) / slope * 60)    // 분
+                    // 기울기: ≥10분 간격 관측 2개 이상일 때만
+                    guard pct < 100, let first = h.first, h.count >= 2,
+                          now.timeIntervalSince(first.ts) >= 600 else { continue }
+                    let hours = now.timeIntervalSince(first.ts) / 3600
+                    let slope = Double(pct - first.pct) / hours          // %/h
+                    guard slope > 0.1 else { continue }                   // 정체 창 제외
+                    let etaMin = Int(Double(100 - pct) / slope * 60)      // 분
+                    // 리셋이 먼저 오면 이 창은 소진되지 않는다 — 경고 대상 아님
+                    if let reset = w.reset, Double(etaMin) * 60 >= reset.timeIntervalSince(now) { continue }
+                    guard etaMin <= 48 * 60 else { continue }             // 48h 밖 외삽은 노이즈
+                    if best == nil || etaMin < best!.minutes { best = BurnEta(window: w.name, minutes: etaMin) }
+                }
+                if let b = best { etas[a.name] = b }
             }
             return etas
         }
