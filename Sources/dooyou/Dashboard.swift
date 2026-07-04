@@ -126,7 +126,7 @@ struct DashboardView: View {
     @ObservedObject var connections: ConnectionModel
     @ObservedObject var preferences: PreferencesModel
     @ObservedObject var routerStore: RouterDecisionStore
-    @State private var route: DashboardRoute = .home
+    @AppStorage("dooyou.dashboardRoute") private var route: DashboardRoute = .home   // 마지막 탭 영속(창 재오픈 시 복원)
 
     var body: some View {
         HStack(spacing: 0) {
@@ -485,6 +485,7 @@ struct DashboardView: View {
                     Text(a.name).font(.callout).bold()
                     limitBar("5h", a.fiveHourPct, a.fiveHourResetsAt)
                     limitBar("주간", a.weeklyPct, a.weeklyResetsAt)
+                    limitBar("Fable", a.fablePct, a.fableResetsAt)   // 클로드 Fable 주간 (claude.ai 대응, 클로드만 렌더)
                 }.padding(.vertical, 2)
             }
         }

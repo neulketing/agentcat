@@ -498,6 +498,7 @@ private extension String {
 
 struct CompactConnectionSection: View {
     @ObservedObject var model: ConnectionModel
+    var onRefresh: (() -> Void)? = nil          // nil이면 연결만 새로고침(구동작 폴백)
     let openDashboard: () -> Void
 
     var body: some View {
@@ -514,11 +515,17 @@ struct CompactConnectionSection: View {
                     }
                 }
                 Spacer()
-                Button { model.refresh() } label: {
+                Button {
+                    model.refresh()
+                    if let onRefresh {
+                        model.lastAction = "연결·사용량 새로고침 중…"
+                        onRefresh()
+                    }
+                } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
-                .help("연결 상태 새로고침")
+                .help(onRefresh == nil ? "연결 상태 새로고침" : "연결 + 라이브 사용량 새로고침")
             }
             HStack(spacing: 6) {
                 StatusCapsule(text: "CLI \(model.cliCount)", color: model.cliCount > 0 ? DooyouStyle.success : .secondary)

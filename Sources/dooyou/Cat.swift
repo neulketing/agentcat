@@ -101,14 +101,59 @@ private func candidateResourceURLs(named name: String, extension ext: String) ->
     return urls
 }
 
+// 유휴(rest) 제스처 — "숨쉬기만 무한반복" 탈피. 긴 매크로 사이클(132틱 ≈119s @0.9s/tick)로
+// 끄덕·콩총·좌우 갸웃·기지개·시미를 번갈아 재생한다. 대부분은 평온 숨쉬기, 정해진 창에서만 짧게.
+// frame=다리 스프라이트 오버라이드 / bob=상하바운스(px) / rotate=회전(도) / squash=세로 스케일 변주(스프라이트 경로만).
+struct IdleMove { var frame = 0; var bob: CGFloat = 0; var rotate: CGFloat = 0; var squash: CGFloat = 0 }
+
+private func idleGesture(_ frame: Int, unit: CGFloat) -> IdleMove {
+    let c = ((frame % 132) + 132) % 132
+    switch c {
+    case 12..<16:                                   // 끄덕 — 머리만 까딱
+        let s = c - 12
+        return IdleMove(bob: [0.35, 0.65, 0.3, 0][s] * unit)
+    case 28..<36:                                   // 콩총 2연 — 다리 사이클 + 아치 바운스 두 번
+        let s = c - 28
+        return IdleMove(frame: [1, 2, 3, 0, 1, 2, 3, 0][s], bob: [0.6, 1.5, 0.9, 0.15, 0.5, 1.2, 0.7, 0.1][s] * unit)
+    case 50..<58:                                   // 좌우 두리번 — 오른쪽 갸웃 → 왼쪽 갸웃
+        let s = c - 50
+        return IdleMove(rotate: [4, 7, 5, 2, -2, -5, -7, -3][s])
+    case 74..<82:                                   // 기지개 — 살짝 눌렸다 쭉(세로 스트레치) + 발돋움
+        let s = c - 74
+        return IdleMove(bob: [0, 0.1, 0.4, 0.7, 0.5, 0.2, 0, 0][s] * unit,
+                        squash: [-0.05, -0.02, 0.08, 0.16, 0.12, 0.05, 0.01, 0][s])
+    case 88..<96:                                   // 웅크렸다 튀어오르기(pounce) — 스쿼시 후 도약
+        let s = c - 88
+        return IdleMove(frame: [0, 0, 1, 2, 3, 0, 0, 0][s],
+                        bob: [-0.3, -0.5, 0.2, 1.4, 0.8, 0.1, 0, 0][s] * unit,
+                        squash: [-0.09, -0.13, -0.03, 0.10, 0.05, 0, 0, 0][s])
+    case 104..<112:                                 // 시미 — 좌우로 잘게 흔들
+        let s = c - 104
+        return IdleMove(rotate: [4, -4, 3.5, -3.5, 3, -3, 1.5, 0][s])
+    default:
+        return IdleMove()
+    }
+}
+
+// 이동 스트라이드 강약 — 매 다리사이클이 똑같지 않게, 몇 사이클마다 도약 크기를 변주(성큼/낮게).
+private func strideAccent(_ frame: Int) -> CGFloat {
+    switch ((frame / dooyouFrames.count) % 6 + 6) % 6 {
+    case 0: return 1.32                             // 성큼 크게
+    case 3: return 0.82                             // 낮게 스치듯
+    default: return 1.0
+    }
+}
+
 func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, mascot: MascotID = .coton, background: BackgroundThemeID = .automatic) -> NSImage {
     guard let spriteFrames = mascotFrameImages[mascot], !spriteFrames.isEmpty else {
         return fallbackDooyouImage(frame, height: height, tier: tier, mascot: mascot, background: background)
     }
 
     let phase = ((frame % spriteFrames.count) + spriteFrames.count) % spriteFrames.count
-    // rest = 서 있는 자세(프레임 0) + 숨쉬기. 그 외엔 다리 사이클.
-    let sprite = spriteFrames[tier == .rest ? 0 : phase]
+    let unit = height / 18                                    // 18px 기준 스케일
+    // rest = 서 있는 자세 + 숨쉬기, 단 유휴 제스처 창에선 콩총/갸웃. 그 외엔 다리 사이클.
+    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit) : IdleMove(frame: phase)
+    let sprite = spriteFrames[tier == .rest ? gesture.frame : phase]
     let canvasWidth = background == .automatic ? height * 1.72 : height * 2.28
     let renderHeight = max(1, height - 2)
     let aspect = sprite.size.width / max(sprite.size.height, 1)
@@ -118,10 +163,9 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, m
         drawWidth = canvasWidth
         drawHeight = canvasWidth / max(aspect, 1)
     }
-    let unit = height / 18                                    // 18px 기준 스케일
-    // 상하 바운스 — 사이클 위상 테이블(뛰어오름→정점→접지→눌림), tier 진폭 곱
+    // 상하 바운스 — 사이클 위상 테이블(뛰어오름→정점→접지→눌림), tier 진폭 곱 × 스트라이드 강약. rest는 유휴 제스처 바운스.
     let bobTable: [CGFloat] = [0, 1.0, 0.15, -0.55]
-    let bob = tier == .rest ? 0 : bobTable[phase] * tier.bobAmp * unit
+    let bob = tier == .rest ? gesture.bob : bobTable[phase] * tier.bobAmp * unit * strideAccent(frame)
     // 휴식 숨쉬기 — 몸통이 천천히 부풀었다 가라앉는다
     let breath: CGFloat = tier == .rest ? [0, 0.014, 0.024, 0.014][phase] : 0
     let stretchX = tier.stretchX
@@ -134,16 +178,16 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, m
         drawDust(phase: phase, tier: tier, height: height, canvasWidth: canvasWidth)
     }
 
-    let w = drawWidth * stretchX * (1 - breath * 0.4)
-    let h = drawHeight * (1 + breath) * (tier >= .sprint ? 0.975 : 1.0)   // 스트레치 시 살짝 낮게(스쿼시)
+    let w = drawWidth * stretchX * (1 - breath * 0.4) * (1 - gesture.squash * 0.35)   // 기지개 시 세로↑ 가로↓
+    let h = drawHeight * (1 + breath) * (1 + gesture.squash) * (tier >= .sprint ? 0.975 : 1.0)
     let x = (canvasWidth - w) / 2
     let y = (height - h) / 2 + bob
     NSGraphicsContext.saveGraphicsState()
-    if tier.lean != 0 {
-        // 전방(오른쪽 진행 방향) 기울임 — 몸 중심 기준 회전
+    let spin = tier.lean + gesture.rotate            // 전방 기울임 + 유휴 갸웃
+    if spin != 0 {
         let t = NSAffineTransform()
         t.translateX(by: x + w / 2, yBy: y + h / 2)
-        t.rotate(byDegrees: tier.lean)
+        t.rotate(byDegrees: spin)
         t.translateX(by: -(x + w / 2), yBy: -(y + h / 2))
         t.concat()
     }
@@ -318,10 +362,12 @@ private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier
     let image = NSImage(size: NSSize(width: width, height: height))
     // rest = 정지 자세(위상 0) + 숨쉬기 대신 미세한 바닥 안착. 그 외엔 사이클.
     let rawPhase = frame % max(dooyouFrames.count, 1)
-    let phase = tier == .rest ? 0 : rawPhase
     let unit = height / 18
-    // 코튼 스프라이트와 같은 바운스 테이블 — 마스코트 셋의 리듬을 통일
-    let hop = tier == .rest ? 0 : [0.0, 1.0, 0.15, -0.55][phase] * tier.bobAmp * unit
+    // 유휴 제스처(콩총/갸웃)로 스프라이트 경로와 리듬 통일
+    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit) : IdleMove(frame: rawPhase)
+    let phase = tier == .rest ? gesture.frame : rawPhase
+    // 코튼 스프라이트와 같은 바운스 테이블 — 마스코트 셋의 리듬을 통일 × 스트라이드 강약
+    let hop = tier == .rest ? gesture.bob : [0.0, 1.0, 0.15, -0.55][phase] * tier.bobAmp * unit * strideAccent(frame)
     let colors = palette(for: mascot)
 
     image.lockFocus()
@@ -332,10 +378,11 @@ private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier
     }
 
     NSGraphicsContext.saveGraphicsState()
-    if tier.lean != 0 {
+    let spin = tier.lean + gesture.rotate
+    if spin != 0 {
         let t = NSAffineTransform()
         t.translateX(by: width / 2, yBy: height / 2)
-        t.rotate(byDegrees: tier.lean)
+        t.rotate(byDegrees: spin)
         t.translateX(by: -width / 2, yBy: -height / 2)
         t.concat()
     }

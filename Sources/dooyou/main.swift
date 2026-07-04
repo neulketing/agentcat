@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        if CommandLine.arguments.contains("--snapshot") {
+            SnapshotRenderer.run(args: CommandLine.arguments)   // UI를 PNG로 렌더 후 exit(0) — Fable이 볼 수 있게
+            return
+        }
         _selfCheck()
         NSApp.setActivationPolicy(.accessory)   // menu-bar only, no dock icon
         statusItem = NSStatusBar.system.statusItem(withLength: statusItemLength)
@@ -97,8 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         animTimer?.invalidate()
         animTimer = Timer.scheduledTimer(withTimeInterval: animInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            // rest에서도 위상은 전진 — Cat.swift가 자세는 고정하고 위상으로 숨쉬기를 돌린다
-            self.frameIdx = (self.frameIdx + 1) % dooyouFrames.count
+            // 모노토닉 틱(2026-07-04): 종전 %4는 0~3만 순환 → 유휴가 늘 같은 숨쉬기.
+            // 큰 주기(4의 배수)로 돌려 다리 위상(%4)은 그대로, 매크로 사이클로 유휴 제스처를 얹는다.
+            self.frameIdx = (self.frameIdx + 1) % 100_000
             self.updateStatusImage()
         }
     }
@@ -144,6 +149,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshLaunchAgentStatus()
     }   // manual refresh button
 
+    // 커넥터 새로고침 = 연결 재확인 + 전 계정 라이브 사용량 프로브 강제 + 재스캔.
+    // 프로브는 fire-and-forget이라 limits 파일에 쓸 시간을 준 뒤 2차 재스캔으로 최신값 반영.
+    func forceRefreshUsage() {
+        connectionModel.refresh()
+        refresh()   // 1차: 캐시 기준 즉시 갱신
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            forceProbeAllLimits()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self?.refresh() }  // 2차: 프로브 결과 반영
+        }
+    }
+
     func applyPower(_ mode: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             applyPowerMode(mode)
@@ -175,6 +191,21 @@ func powerIcon(_ mode: String) -> String {
     }
 }
 
+// 팝오버용 압축 한도 — "5h 37% · wk 33% · Fable 46%" (리셋 카운트다운 생략, 색상 코딩).
+// 한도 3~4개가 붙어도 한 줄에 담기게 재정비(상세 리셋은 대시보드 "한도" 바가 담당).
+func hudCompact(_ a: Account) -> Text? {
+    func seg(_ label: String, _ pct: Int?) -> Text? {
+        guard let p = pct else { return nil }
+        let c: Color = p >= 90 ? .red : (p >= 70 ? .orange : .green)
+        return Text("\(label) ") + Text("\(p)%").foregroundColor(c).bold()
+    }
+    let parts = [seg("5h", a.fiveHourPct), seg("wk", a.weeklyPct),
+                 seg("Fable", a.fablePct), seg("mo", a.monthlyPct)].compactMap { $0 }
+    if parts.isEmpty, let note = a.limitNote { return Text(note).foregroundColor(.secondary) }
+    guard let first = parts.first else { return nil }
+    return parts.dropFirst().reduce(first) { $0 + Text("  ·  ").foregroundColor(.secondary) + $1 }
+}
+
 // OMC-style per-account limit HUD: "5h 3%(4h38m)  wk 95%(2d18h)" with colored %.
 func hudText(_ a: Account) -> Text? {
     func seg(_ label: String, _ pct: Int?, _ reset: Date?) -> Text? {
@@ -186,6 +217,7 @@ func hudText(_ a: Account) -> Text? {
     }
     let parts = [seg("5h", a.fiveHourPct, a.fiveHourResetsAt),
                  seg("wk", a.weeklyPct, a.weeklyResetsAt),
+                 seg("Fable", a.fablePct, a.fableResetsAt),   // 클로드 Fable 주간 (모든모델 wk와 별개)
                  seg("mo", a.monthlyPct, a.monthlyResetsAt)].compactMap { $0 }
     if parts.isEmpty, let note = a.limitNote { return Text(note).foregroundColor(.secondary) }
     guard let first = parts.first else { return nil }
@@ -222,7 +254,9 @@ struct DashView: View {
                     .monospacedDigit()
             }
             CoordinatorOverview(status: model.launchAgent)
-            CompactConnectionSection(model: connections) {
+            CompactConnectionSection(model: connections, onRefresh: {
+                (NSApp.delegate as? AppDelegate)?.forceRefreshUsage()
+            }) {
                 (NSApp.delegate as? AppDelegate)?.openDashboard()
             }
             RouterStatusStrip(store: routerStore) {
@@ -245,25 +279,30 @@ struct DashView: View {
                 Text("\(eok(snap.week)) · \(usd(snap.weekCost))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
             Divider()
             ForEach(snap.accounts) { a in
-                VStack(alignment: .trailing, spacing: 1) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(a.name).font(.callout)
+                VStack(alignment: .leading, spacing: 2) {
+                    // 1행: 이름 · 이메일 ······ 오늘 사용량 (한 줄 고정)
+                    HStack(spacing: 6) {
+                        Text(a.name).font(.callout).fontWeight(.semibold)
                         if let e = a.email {
                             Text(e).font(.caption2).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.middle)
                         }
-                        Spacer(minLength: 8)
-                        if let hud = hudText(a) { hud.font(.caption2) }
-                    }
-                    if let eta = model.burnEta[a.name] {
-                        Text("이 속도면 \(eta.window) 소진까지 ~\(fmtEtaMin(eta.minutes))")
-                            .font(.caption2)
-                            .foregroundColor(eta.minutes <= 30 ? .red : .orange)
-                    } else {
-                        Text("오늘 \(eok(a.today)) · 7일 \(eok(a.week))")
+                        Spacer(minLength: 6)
+                        Text("오늘 \(eok(a.today))")
                             .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
                     }
+                    // 2행: 압축 한도 (5h · wk · Fable), 한 줄 — 넘치면 살짝 축소
+                    if let hud = hudCompact(a) {
+                        hud.font(.caption2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    // 3행: 소진 ETA (있을 때만) — 없으면 생략해 밀도 통일
+                    if let eta = model.burnEta[a.name] {
+                        Text("이 속도면 \(eta.window) 소진 ~\(fmtEtaMin(eta.minutes))")
+                            .font(.caption2)
+                            .foregroundColor(eta.minutes <= 30 ? .red : .orange)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .help("오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))")
             }
             Divider()

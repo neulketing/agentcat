@@ -17,6 +17,8 @@ struct Account: Identifiable {
     var weeklyResetsAt: Date? = nil
     var monthlyPct: Int? = nil       // GLM (Z.ai) only — monthly window
     var monthlyResetsAt: Date? = nil
+    var fablePct: Int? = nil         // Claude only — Fable-scoped weekly (claude.ai "Fable" bar). wk("모든 모델")와 별개.
+    var fableResetsAt: Date? = nil
     var email: String? = nil         // logged-in account (oauth / id_token)
     var limitNote: String? = nil
 }
@@ -263,6 +265,17 @@ func scan(daysWindow: Int = 8, includeMini: Bool = true) -> Dashboard {
 
 func scanAll(includeMini: Bool = true) -> Snapshot { scan(daysWindow: 8, includeMini: includeMini).snap }
 
+// 수동 "지금 사용량 체크" — 전 계정 라이브 프로브를 게이트 무시하고 강제 발사(fire-and-forget).
+// 결과(limits/*.json)는 직후 재스캔이 읽는다. 커넥터 새로고침 버튼이 호출.
+func forceProbeAllLimits() {
+    let h = NSHomeDirectory()
+    for cfg in [h + "/.claude", h + "/.claude-account2", h + "/.claude-account3",
+                h + "/.codex", h + "/.codex-account2"] {
+        maybeProbeLimits(cfg, force: true)
+    }
+    maybeProbeLimits("glm", force: true)
+}
+
 // ---- Mac mini sum: read the snapshot Syncthing carries from the mini ----
 let defaultMiniEmitPath = firstExistingPath([
     NSHomeDirectory() + "/hermes/_minibrain/dooyou-mini.json",
@@ -494,12 +507,13 @@ private func resolveNode() -> String? {
     }
     return nil
 }
-private func maybeProbeLimits(_ configDir: String) {
+// force=true면 5분 게이트를 무시(수동 "지금 사용량 체크" — 사용자 버튼 트리거).
+private func maybeProbeLimits(_ configDir: String, force: Bool = false) {
     let helper = NSHomeDirectory() + "/.dooyou/bin/probe-limits.mjs"
     let fm = FileManager.default
     guard fm.fileExists(atPath: helper), let node = resolveNode() else { return }
     probeLock.lock()
-    if let last = lastProbe[configDir], Date().timeIntervalSince(last) < 300 { probeLock.unlock(); return }
+    if !force, let last = lastProbe[configDir], Date().timeIntervalSince(last) < 300 { probeLock.unlock(); return }
     lastProbe[configDir] = Date()
     probeLock.unlock()
     let p = Process()
@@ -536,9 +550,10 @@ private func applyRateLimits(_ rl: [String: Any], _ a: inout Account) {
         let reset = (w["resets_at"] as? NSNumber)?.doubleValue
         return (Int(used.rounded()), reset.map { Date(timeIntervalSince1970: $0) })
     }
-    if let (p, r) = window("five_hour") { a.fiveHourPct = p; a.fiveHourResetsAt = r }
-    if let (p, r) = window("seven_day") { a.weeklyPct = p; a.weeklyResetsAt = r }
-    if let (p, r) = window("monthly")   { a.monthlyPct = p; a.monthlyResetsAt = r }
+    if let (p, r) = window("five_hour")    { a.fiveHourPct = p; a.fiveHourResetsAt = r }
+    if let (p, r) = window("seven_day")    { a.weeklyPct = p; a.weeklyResetsAt = r }
+    if let (p, r) = window("fable_weekly") { a.fablePct = p; a.fableResetsAt = r }   // 클로드 Fable 주간 (claude.ai UI 대응)
+    if let (p, r) = window("monthly")      { a.monthlyPct = p; a.monthlyResetsAt = r }
 }
 
 // ---- logged-in account email (cached; never changes within a session) ----
