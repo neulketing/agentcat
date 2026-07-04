@@ -43,24 +43,28 @@ async function probeClaude(configDir) {
   if (!cred) { console.error('no access token'); process.exitCode = 2; return null; }
   if (cred.expiresAt && cred.expiresAt < Date.now()) { console.error('token expired'); process.exitCode = 3; return null; }
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${cred.token}`,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'oauth-2025-04-20',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }),
+  // GET /api/oauth/usage — plain read, no inference tokens (same endpoint OMC's HUD
+  // uses). Gives five_hour + seven_day (all-models) AND the Fable-scoped weekly
+  // window in limits[]. The old message-header path can't see Fable: a maxed-Fable
+  // request returns a bare 429 with no rate-limit headers (verified 2026-07-04).
+  const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+    headers: { authorization: `Bearer ${cred.token}`, 'anthropic-beta': 'oauth-2025-04-20' },
   });
-  const g = (k) => res.headers.get(`anthropic-ratelimit-unified-${k}`);
-  const u5 = g('5h-utilization'), u7 = g('7d-utilization');
-  if (u5 == null && u7 == null) { console.error('no rate-limit headers (status ' + res.status + ')'); process.exitCode = 4; return null; }
-  const pct = (u) => (u == null ? null : Math.round(parseFloat(u) * 100));
+  const j = await res.json().catch(() => null);
+  if (!j || (j.five_hour == null && j.seven_day == null)) { console.error('no usage data (status ' + res.status + ')'); process.exitCode = 4; return null; }
+  const iso = (s) => (s ? Math.floor(Date.parse(s) / 1000) : null);   // usage API gives ISO; store unix sec (contract)
+  const win = (o) => (o && o.utilization != null ? { used_percentage: Math.round(o.utilization), resets_at: iso(o.resets_at) } : null);
   const rl = {};
-  if (u5 != null) rl.five_hour = { used_percentage: pct(u5), resets_at: g('5h-reset') ? parseInt(g('5h-reset'), 10) : null };
-  if (u7 != null) rl.seven_day = { used_percentage: pct(u7), resets_at: g('7d-reset') ? parseInt(g('7d-reset'), 10) : null };
-  return rl;
+  const f5 = win(j.five_hour), s7 = win(j.seven_day);
+  if (f5) rl.five_hour = f5;
+  if (s7) rl.seven_day = s7;
+  // Fable = a separate weekly_scoped cap. An account can be all-models healthy but
+  // Fable-maxed → brain/Fable work must route elsewhere. Additive; own captured_at
+  // so it self-ages when a statusline render (which lacks it) carries it forward.
+  const fable = Array.isArray(j.limits) && j.limits.find(
+    (l) => l && l.group === 'weekly' && l.scope?.model?.display_name === 'Fable' && l.percent != null);
+  if (fable) rl.fable_weekly = { used_percentage: Math.round(fable.percent), resets_at: iso(fable.resets_at), captured_at: Math.floor(Date.now() / 1000) };
+  return Object.keys(rl).length ? rl : null;
 }
 
 function codexModel(configDir) {
@@ -151,6 +155,7 @@ async function main() {
   const dir = join(process.env.HOME, '.dooyou', 'limits');
   mkdirSync(dir, { recursive: true });
   const out = {
+    schema: 1,   // additive contract version (omf CONTRACT.md)
     // synthetic transcript_path so dooyou's Claude account-prefix check accepts it
     transcript_path: join(configDir, 'projects', '__dooyou_probe__.jsonl'),
     captured_at: Math.floor(Date.now() / 1000),
@@ -161,8 +166,8 @@ async function main() {
   const tmp = dest + '.' + process.pid + '.tmp';
   writeFileSync(tmp, JSON.stringify(out));
   renameSync(tmp, dest);
-  const f = rate_limits.five_hour, s = rate_limits.seven_day;
-  console.error(`probe ok ${basename(configDir)} 5h=${f ? f.used_percentage : '-'}% wk=${s ? s.used_percentage : '-'}%`);
+  const f = rate_limits.five_hour, s = rate_limits.seven_day, fb = rate_limits.fable_weekly;
+  console.error(`probe ok ${basename(configDir)} 5h=${f ? f.used_percentage : '-'}% wk=${s ? s.used_percentage : '-'}%${fb ? ` fable=${fb.used_percentage}%` : ''}`);
 }
 
 main().catch((e) => { console.error(String(e)); process.exit(1); });

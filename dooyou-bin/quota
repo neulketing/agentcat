@@ -18,6 +18,7 @@
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { hostname } from 'os';
+import { route, loadSeats } from '../lib/route.mjs';
 
 const HOME = process.env.HOME;
 const DIR = join(HOME, '.dooyou', 'limits');
@@ -78,12 +79,24 @@ function load() {
     const w = (k) => (rl[k] && rl[k].used_percentage != null ? Math.round(rl[k].used_percentage) : null);
     const used = ['five_hour', 'seven_day', 'monthly'].map(w).filter((x) => x != null);
     if (!used.length) continue;
+    const headroom = 100 - Math.max(...used);
+    // Fable-scoped weekly (Claude only, from /api/oauth/usage). A separate server-side
+    // cap: an account can have worker headroom (Opus/codex bill all-models weekly)
+    // while Fable is maxed. Self-ages via its own captured_at — a statusline render
+    // carries it forward but can't refresh it, so drop it once stale.
+    const fw = rl.fable_weekly;
+    const fableWeekly = (fw && fw.used_percentage != null && (fw.captured_at == null || now - fw.captured_at <= STALE_SEC))
+      ? Math.round(fw.used_percentage) : null;
+    // Brain/Fable headroom = worker headroom capped by the Fable window. Unknown → = headroom.
+    const fableHeadroom = fableWeekly == null ? headroom : Math.min(headroom, 100 - fableWeekly);
     const email = emailFor(key, meta.provider);
     out.push({
       key, provider: meta.provider, email, host,
       label: `${meta.provider} · ${email || key}`,
       five_hour: w('five_hour'), weekly: w('seven_day'), monthly: w('monthly'),
-      headroom: 100 - Math.max(...used),
+      fable_weekly: fableWeekly, fable_headroom: fableHeadroom,
+      five_hour_resets_in_min: (rl.five_hour && rl.five_hour.resets_at) ? Math.max(0, Math.round((rl.five_hour.resets_at - now) / 60)) : null,
+      headroom,
       stale: now - cap > STALE_SEC,
       age_min: Math.round((now - cap) / 60),
     });
@@ -97,8 +110,23 @@ const rows = load();
 
 if (args.includes('--best')) {
   const prov = args[args.indexOf('--best') + 1];
-  const pool = prov && !prov.startsWith('--') ? rows.filter((r) => r.provider === prov) : rows;
-  const best = pool.find((r) => !r.stale) || pool[0];
+  const provFilter = prov && !prov.startsWith('--') ? prov : null;
+  // 규율 라우터(lib/route.mjs)에 위임 — floor·gain0·헬스 쿨다운·리셋·stale를 반영해 좌석을 고른다
+  // (무규율 pool.find(!stale) 재구현 금지, CONTRACT §5·§6 진입점). provider 미지정 시 전역 headroom
+  // 순으로 벤더 우선순위를 준다(rows는 headroom 내림차순 정렬됨).
+  const providers = provFilter
+    ? [provFilter]
+    : [...new Set([...rows.filter((r) => !r.stale), ...rows].map((r) => r.provider))];
+  let best = null;
+  try {
+    const seat = route({ taskClass: 'worker', providers }, loadSeats(), rows);
+    if (seat.accountKey) best = rows.find((r) => r.key === seat.accountKey) ?? null;
+  } catch { /* 라우팅 불능 시 아래 least-bad 폴백 */ }
+  if (!best) {
+    // route가 C1(전 좌석 floor 이하)이거나 불능 — --best는 항상 계정 1개를 반환한다(least-bad).
+    const pool = provFilter ? rows.filter((r) => r.provider === provFilter) : rows;
+    best = pool.find((r) => !r.stale) || pool[0];
+  }
   if (!best) { console.error('no quota data'); process.exit(1); }
   console.log(args.includes('--json') ? JSON.stringify(best) : best.key);
 } else if (args.includes('--json')) {
@@ -107,10 +135,12 @@ if (args.includes('--best')) {
   if (!rows.length) { console.error('no quota data (is dooyou running?)'); process.exit(1); }
   const pct = (v) => (v == null ? '  -' : String(v).padStart(3) + '%');
   const labelW = Math.max(12, ...rows.map((r) => r.label.length));
-  console.log('headroom  ' + 'account'.padEnd(labelW) + '   5h    wk    mo    age');
+  // fbl = Fable-scoped weekly used% (Claude only). When it diverges from wk, brain/Fable
+  // work must route by fable_headroom, not the leftmost (worker) headroom column.
+  console.log('headroom  ' + 'account'.padEnd(labelW) + '   5h    wk   fbl    mo    age');
   for (const r of rows) {
     console.log(
-      `${String(r.headroom).padStart(6)}%  ${r.label.padEnd(labelW)} ${pct(r.five_hour)} ${pct(r.weekly)} ${pct(r.monthly)}  ${r.stale ? `${r.age_min}m!` : `${r.age_min}m`}`,
+      `${String(r.headroom).padStart(6)}%  ${r.label.padEnd(labelW)} ${pct(r.five_hour)} ${pct(r.weekly)} ${pct(r.fable_weekly)} ${pct(r.monthly)}  ${r.stale ? `${r.age_min}m!` : `${r.age_min}m`}`,
     );
   }
 }
