@@ -22,6 +22,10 @@ LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 GUI_DOMAIN="gui/$(id -u)"
 
 cd "$ROOT_DIR"
+if [[ "$MODE" == "--install" || "$MODE" == "install" ]]; then
+  exec "$ROOT_DIR/script/install_login_item.sh"
+fi
+
 if [[ "$MODE" != "--build-only" && "$MODE" != "build-only" ]]; then
   # KeepAlive 런치에이전트가 있으면 먼저 bootout — 안 하면 pkill 순간 launchd가 되살려
   # open -n과 합쳐 2중 인스턴스가 된다 (2026-07-03 실사고: 메뉴바 두유 2개).

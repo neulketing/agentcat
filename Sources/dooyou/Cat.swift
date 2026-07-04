@@ -101,28 +101,41 @@ private func candidateResourceURLs(named name: String, extension ext: String) ->
     return urls
 }
 
-// 유휴(rest) 제스처 — "숨쉬기만 무한반복" 탈피. 긴 매크로 사이클(132틱 ≈119s @0.9s/tick)로
-// 끄덕·콩총·좌우 갸웃·기지개·시미를 번갈아 재생한다. 대부분은 평온 숨쉬기, 정해진 창에서만 짧게.
+// 유휴(rest) 제스처 — 마스코트별 성격은 다르게, frameIdx는 그대로 긴 매크로 사이클에만 매핑한다.
+// dooyou/coton=콩총·기대감, cat=꼬리 flick·주시 갸웃, turtle=느린 기어감·등딱지 rock.
 // frame=다리 스프라이트 오버라이드 / bob=상하바운스(px) / rotate=회전(도) / squash=세로 스케일 변주(스프라이트 경로만).
 struct IdleMove { var frame = 0; var bob: CGFloat = 0; var rotate: CGFloat = 0; var squash: CGFloat = 0 }
 
-private func idleGesture(_ frame: Int, unit: CGFloat) -> IdleMove {
+private func idleGesture(_ frame: Int, unit: CGFloat, mascot: MascotID) -> IdleMove {
     let c = ((frame % 132) + 132) % 132
+    switch mascot {
+    case .cat:
+        return catIdleGesture(c, unit: unit)
+    case .turtle:
+        return turtleIdleGesture(c, unit: unit)
+    default:
+        return cotonIdleGesture(c, unit: unit)
+    }
+}
+
+private func cotonIdleGesture(_ c: Int, unit: CGFloat) -> IdleMove {
     switch c {
-    case 12..<16:                                   // 끄덕 — 머리만 까딱
-        let s = c - 12
-        return IdleMove(bob: [0.35, 0.65, 0.3, 0][s] * unit)
-    case 28..<36:                                   // 콩총 2연 — 다리 사이클 + 아치 바운스 두 번
-        let s = c - 28
-        return IdleMove(frame: [1, 2, 3, 0, 1, 2, 3, 0][s], bob: [0.6, 1.5, 0.9, 0.15, 0.5, 1.2, 0.7, 0.1][s] * unit)
-    case 50..<58:                                   // 좌우 두리번 — 오른쪽 갸웃 → 왼쪽 갸웃
+    case 10..<16:                                   // 기대며 끄덕 — 작은 준비 동작
+        let s = c - 10
+        return IdleMove(bob: [0.25, 0.55, 0.75, 0.45, 0.18, 0][s] * unit)
+    case 26..<36:                                   // 콩총 2연 — eager/bouncy
+        let s = c - 26
+        return IdleMove(frame: [1, 2, 3, 0, 1, 2, 3, 0, 0, 0][s],
+                        bob: [0.55, 1.55, 0.95, 0.12, 0.65, 1.35, 0.80, 0.10, 0, 0][s] * unit,
+                        squash: [-0.03, 0.08, 0.02, -0.04, -0.02, 0.07, 0.02, -0.03, 0, 0][s])
+    case 50..<58:                                   // 반가운 좌우 갸웃
         let s = c - 50
-        return IdleMove(rotate: [4, 7, 5, 2, -2, -5, -7, -3][s])
-    case 74..<82:                                   // 기지개 — 살짝 눌렸다 쭉(세로 스트레치) + 발돋움
+        return IdleMove(rotate: [3, 6, 4, 1, -1, -4, -6, -2][s])
+    case 74..<82:                                   // 기지개 — 살짝 눌렸다 쭉
         let s = c - 74
         return IdleMove(bob: [0, 0.1, 0.4, 0.7, 0.5, 0.2, 0, 0][s] * unit,
                         squash: [-0.05, -0.02, 0.08, 0.16, 0.12, 0.05, 0.01, 0][s])
-    case 88..<96:                                   // 웅크렸다 튀어오르기(pounce) — 스쿼시 후 도약
+    case 88..<96:                                   // 웅크렸다 튀어오르기
         let s = c - 88
         return IdleMove(frame: [0, 0, 1, 2, 3, 0, 0, 0][s],
                         bob: [-0.3, -0.5, 0.2, 1.4, 0.8, 0.1, 0, 0][s] * unit,
@@ -135,6 +148,55 @@ private func idleGesture(_ frame: Int, unit: CGFloat) -> IdleMove {
     }
 }
 
+private func catIdleGesture(_ c: Int, unit: CGFloat) -> IdleMove {
+    switch c {
+    case 14..<22:                                   // 꼬리 flick — 다리 프레임으로 꼬리 위상만 살린다
+        let s = c - 14
+        return IdleMove(frame: [0, 1, 2, 1, 3, 2, 0, 0][s],
+                        bob: [0, 0.05, 0, 0.03, 0, 0.02, 0, 0][s] * unit)
+    case 38..<46:                                   // watchful tilt — 낮고 조심스러운 시선 이동
+        let s = c - 38
+        return IdleMove(rotate: [0, -2, -4, -5, -4, -2, 1, 0][s],
+                        squash: [0, -0.01, -0.02, -0.02, -0.01, 0, 0, 0][s])
+    case 62..<70:                                   // 반대쪽 귀 기울임
+        let s = c - 62
+        return IdleMove(rotate: [0, 2, 4, 5, 4, 2, -1, 0][s])
+    case 88..<96:                                   // 낮은 pounce 준비 — 도약보다 주시감
+        let s = c - 88
+        return IdleMove(frame: [0, 0, 1, 1, 2, 1, 0, 0][s],
+                        bob: [0, -0.12, -0.22, -0.28, -0.16, -0.05, 0, 0][s] * unit,
+                        squash: [0, -0.04, -0.08, -0.10, -0.05, -0.02, 0, 0][s])
+    case 108..<116:                                 // 빠른 꼬리 재확인
+        let s = c - 108
+        return IdleMove(frame: [0, 3, 2, 3, 1, 2, 0, 0][s],
+                        rotate: [0, 1.5, -1.5, 1, -1, 0.5, 0, 0][s])
+    default:
+        return IdleMove()
+    }
+}
+
+private func turtleIdleGesture(_ c: Int, unit: CGFloat) -> IdleMove {
+    switch c {
+    case 18..<30:                                   // 느린 confident crawl — 긴 호흡의 한 걸음
+        let s = c - 18
+        return IdleMove(frame: [0, 0, 1, 1, 2, 2, 3, 3, 2, 1, 0, 0][s],
+                        bob: [0, 0.03, 0.08, 0.12, 0.16, 0.14, 0.10, 0.07, 0.04, 0.02, 0, 0][s] * unit)
+    case 48..<58:                                   // 등딱지 rock — 천천히 묵직하게
+        let s = c - 48
+        return IdleMove(rotate: [0, 1, 2, 2.5, 1.5, 0, -1, -1.5, -0.8, 0][s],
+                        squash: [0, -0.01, -0.02, -0.02, -0.01, 0, -0.01, -0.015, -0.005, 0][s])
+    case 78..<90:                                   // 목 내밀고 확인
+        let s = c - 78
+        return IdleMove(frame: [0, 0, 0, 1, 1, 1, 0, 0, 2, 1, 0, 0][s],
+                        bob: [0, 0, 0.02, 0.05, 0.08, 0.08, 0.05, 0.02, 0.04, 0.02, 0, 0][s] * unit)
+    case 110..<120:                                 // 작은 shell settle
+        let s = c - 110
+        return IdleMove(bob: [0, -0.03, -0.05, -0.06, -0.03, 0, 0.03, 0.04, 0.02, 0][s] * unit,
+                        rotate: [0, -0.8, -1.4, -1.8, -1.0, 0, 0.8, 1.1, 0.5, 0][s])
+    default:
+        return IdleMove()
+    }
+}
 // 이동 스트라이드 강약 — 매 다리사이클이 똑같지 않게, 몇 사이클마다 도약 크기를 변주(성큼/낮게).
 private func strideAccent(_ frame: Int) -> CGFloat {
     switch ((frame / dooyouFrames.count) % 6 + 6) % 6 {
@@ -152,7 +214,7 @@ func dooyouImage(_ frame: Int, height: CGFloat = 18, tier: MotionTier = .walk, m
     let phase = ((frame % spriteFrames.count) + spriteFrames.count) % spriteFrames.count
     let unit = height / 18                                    // 18px 기준 스케일
     // rest = 서 있는 자세 + 숨쉬기, 단 유휴 제스처 창에선 콩총/갸웃. 그 외엔 다리 사이클.
-    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit) : IdleMove(frame: phase)
+    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit, mascot: mascot) : IdleMove(frame: phase)
     let sprite = spriteFrames[tier == .rest ? gesture.frame : phase]
     let canvasWidth = background == .automatic ? height * 1.72 : height * 2.28
     let renderHeight = max(1, height - 2)
@@ -364,7 +426,7 @@ private func fallbackDooyouImage(_ frame: Int, height: CGFloat, tier: MotionTier
     let rawPhase = frame % max(dooyouFrames.count, 1)
     let unit = height / 18
     // 유휴 제스처(콩총/갸웃)로 스프라이트 경로와 리듬 통일
-    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit) : IdleMove(frame: rawPhase)
+    let gesture: IdleMove = tier == .rest ? idleGesture(frame, unit: unit, mascot: mascot) : IdleMove(frame: rawPhase)
     let phase = tier == .rest ? gesture.frame : rawPhase
     // 코튼 스프라이트와 같은 바운스 테이블 — 마스코트 셋의 리듬을 통일 × 스트라이드 강약
     let hop = tier == .rest ? gesture.bob : [0.0, 1.0, 0.15, -0.55][phase] * tier.bobAmp * unit * strideAccent(frame)

@@ -19,16 +19,34 @@ if [[ ! -d "$APP_SOURCE" ]]; then
   exit 1
 fi
 
-say_step "Requesting administrator permission for /Applications install and Remote Login."
-sudo -v
+USE_SUDO=0
+run_privileged() {
+  if [[ "$USE_SUDO" == "1" ]]; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
+if [[ ! -w "$(dirname "$APP_DEST")" || ( -e "$APP_DEST" && ! -w "$APP_DEST" ) ]]; then
+  say_step "Requesting administrator permission for /Applications install."
+  sudo -v
+  USE_SUDO=1
+else
+  say_step "Installing without administrator prompt; /Applications is writable."
+fi
 
 say_step "Installing $APP_DEST."
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 pkill -x agentcat >/dev/null 2>&1 || true
-sudo rm -rf "$APP_DEST"
-sudo cp -R "$APP_SOURCE" "$APP_DEST"
-sudo chown -R root:wheel "$APP_DEST"
-sudo xattr -dr com.apple.quarantine "$APP_DEST" >/dev/null 2>&1 || true
+run_privileged rm -rf "$APP_DEST"
+run_privileged cp -R "$APP_SOURCE" "$APP_DEST"
+if [[ "$USE_SUDO" == "1" ]]; then
+  sudo chown -R root:wheel "$APP_DEST"
+  sudo xattr -dr com.apple.quarantine "$APP_DEST" >/dev/null 2>&1 || true
+else
+  xattr -dr com.apple.quarantine "$APP_DEST" >/dev/null 2>&1 || true
+fi
 
 say_step "Enabling launch at login for the current user."
 mkdir -p "$(dirname "$PLIST")"
@@ -63,16 +81,20 @@ launchctl enable "gui/$(id -u)/$BUNDLE_ID" >/dev/null 2>&1 || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST" >/dev/null 2>&1 || true
 launchctl kickstart -k "gui/$(id -u)/$BUNDLE_ID" >/dev/null 2>&1 || true
 
-say_step "Enabling Remote Login for future automatic installs."
-sudo dseditgroup -o create -q com.apple.access_ssh >/dev/null 2>&1 || true
-sudo dseditgroup -o edit -a "$USER" -t user com.apple.access_ssh >/dev/null 2>&1 || true
-if ! sudo systemsetup -f -setremotelogin on >/dev/null 2>&1; then
-  sudo launchctl enable system/com.openssh.sshd >/dev/null 2>&1 || true
-  sudo launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true
-  sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist >/dev/null 2>&1 || true
+if [[ "$USE_SUDO" == "1" || "$(sudo -n true >/dev/null 2>&1; echo $?)" == "0" ]]; then
+  say_step "Enabling Remote Login for future automatic installs."
+  sudo dseditgroup -o create -q com.apple.access_ssh >/dev/null 2>&1 || true
+  sudo dseditgroup -o edit -a "$USER" -t user com.apple.access_ssh >/dev/null 2>&1 || true
+  if ! sudo systemsetup -f -setremotelogin on >/dev/null 2>&1; then
+    sudo launchctl enable system/com.openssh.sshd >/dev/null 2>&1 || true
+    sudo launchctl kickstart -k system/com.openssh.sshd >/dev/null 2>&1 || true
+    sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist >/dev/null 2>&1 || true
+  fi
+  REMOTE_LOGIN_STATUS="$(sudo systemsetup -getremotelogin 2>/dev/null || true)"
+else
+  say_step "Skipping Remote Login admin step; current SSH session is already reachable."
+  REMOTE_LOGIN_STATUS="already reachable; admin step skipped"
 fi
-
-REMOTE_LOGIN_STATUS="$(sudo systemsetup -getremotelogin 2>/dev/null || true)"
 TAILSCALE_IP="$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null | head -1 || true)"
 
 say_step "Launching $APP_NAME."

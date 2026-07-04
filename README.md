@@ -49,8 +49,10 @@ LaunchAgent. The LaunchAgent runs DOOYOU directly with `KeepAlive`, so it comes
 back if the process exits.
 
 ```bash
-./script/install_login_item.sh
+./script/build_and_run.sh --install
 ```
+
+(`./script/install_login_item.sh` is the direct installer entrypoint.)
 
 Disable login launch:
 

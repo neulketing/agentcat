@@ -191,16 +191,21 @@ func powerIcon(_ mode: String) -> String {
     }
 }
 
-// 팝오버용 압축 한도 — "5h 37% · wk 33% · Fable 46%" (리셋 카운트다운 생략, 색상 코딩).
-// 한도 3~4개가 붙어도 한 줄에 담기게 재정비(상세 리셋은 대시보드 "한도" 바가 담당).
+// 팝오버용 압축 한도 — "5h 82%(1h)" 형식으로 한도와 리셋까지 남은 시간을 함께 노출.
 func hudCompact(_ a: Account) -> Text? {
-    func seg(_ label: String, _ pct: Int?) -> Text? {
+    func seg(_ label: String, _ pct: Int?, _ reset: Date?) -> Text? {
         guard let p = pct else { return nil }
-        let c: Color = p >= 90 ? .red : (p >= 70 ? .orange : .green)
-        return Text("\(label) ") + Text("\(p)%").foregroundColor(c).bold()
+        let c: Color = p >= 90 ? DooyouStyle.error : (p >= 70 ? DooyouStyle.warning : DooyouStyle.success)
+        var t = Text("\(label) ") + Text("\(p)%").foregroundColor(c).bold()
+        if let reset {
+            t = t + Text("(\(countdown(reset)))").foregroundColor(.secondary)
+        }
+        return t
     }
-    let parts = [seg("5h", a.fiveHourPct), seg("wk", a.weeklyPct),
-                 seg("Fable", a.fablePct), seg("mo", a.monthlyPct)].compactMap { $0 }
+    let parts = [seg("5h", a.fiveHourPct, a.fiveHourResetsAt),
+                 seg("wk", a.weeklyPct, a.weeklyResetsAt),
+                 seg("Fable", a.fablePct, a.fableResetsAt),
+                 seg("mo", a.monthlyPct, a.monthlyResetsAt)].compactMap { $0 }
     if parts.isEmpty, let note = a.limitNote { return Text(note).foregroundColor(.secondary) }
     guard let first = parts.first else { return nil }
     return parts.dropFirst().reduce(first) { $0 + Text("  ·  ").foregroundColor(.secondary) + $1 }
@@ -231,28 +236,30 @@ struct DashView: View {
     var snap: Snapshot { model.snap }
     var sys: SysStats { model.sys }
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("dooyou").font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("dooyou")
+                        .font(.headline)
+                    Text("오늘 \(eok(snap.today)) · 에이전트 \(snap.activeAgents)개")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Spacer()
                 Button { (NSApp.delegate as? AppDelegate)?.forceRefresh() } label: {
                     Image(systemName: "arrow.clockwise")
-                }.buttonStyle(.plain).help("새로고침")
-                Text(snap.activeAgents > 0 ? "활발" : "대기")
-                    .font(.caption2).padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(snap.activeAgents > 0 ? Color.green.opacity(0.25) : Color.gray.opacity(0.2))
-                    .clipShape(Capsule())
+                        .foregroundStyle(DooyouStyle.info)
+                }
+                .buttonStyle(.plain)
+                .help("새로고침")
+                StatusCapsule(text: snap.activeAgents > 0 ? "활발" : "대기",
+                              color: snap.activeAgents > 0 ? DooyouStyle.success : .secondary)
             }
-            HStack(spacing: 6) {
-                Text("에이전트 \(snap.activeAgents)개 동작 중")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("오늘 \(eok(snap.today))")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
-            }
+            .padding(12)
+            .background(DooyouStyle.surfaceElevated.opacity(0.86), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+
             CoordinatorOverview(status: model.launchAgent)
             CompactConnectionSection(model: connections, onRefresh: {
                 (NSApp.delegate as? AppDelegate)?.forceRefreshUsage()
@@ -269,70 +276,127 @@ struct DashView: View {
                 (NSApp.delegate as? AppDelegate)?.openDashboard()
             }
             SystemOverview(sys: sys)
-            Divider()
-            // 밀도 조정(2026-07-03): 합계 4줄→2줄(합계+API환산 병합), 계정당 4~5줄→2줄.
-            // 계정별 $ 상세·이메일 전체는 대시보드 담당 — 팝오버는 한도·오늘이 본체.
-            HStack { Text("오늘").bold(); Spacer()
-                Text(eok(snap.today)).bold().monospacedDigit()
-                Text(usd(snap.todayCost)).font(.subheadline).foregroundStyle(.green).monospacedDigit() }
-            HStack { Text("7일").font(.caption).foregroundStyle(.secondary); Spacer()
-                Text("\(eok(snap.week)) · \(usd(snap.weekCost))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
-            Divider()
-            ForEach(snap.accounts) { a in
-                VStack(alignment: .leading, spacing: 2) {
-                    // 1행: 이름 · 이메일 ······ 오늘 사용량 (한 줄 고정)
-                    HStack(spacing: 6) {
-                        Text(a.name).font(.callout).fontWeight(.semibold)
-                        if let e = a.email {
-                            Text(e).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("사용량").font(.caption).fontWeight(.semibold)
+                    Spacer()
+                    Text("오늘 \(eok(snap.today))")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
+                    Text(usd(snap.todayCost))
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(DooyouStyle.success)
+                        .monospacedDigit()
+                }
+                HStack(spacing: 6) {
+                    StatusCapsule(text: "7일 \(eok(snap.week))", color: DooyouStyle.info)
+                    StatusCapsule(text: usd(snap.weekCost), color: DooyouStyle.success)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(12)
+            .background(DooyouStyle.surfaceElevated.opacity(0.78), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("계정 한도").font(.caption).fontWeight(.semibold)
+                    Text("괄호=리셋까지").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(snap.accounts.count)개")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                VStack(spacing: 6) {
+                    ForEach(Array(snap.accounts.prefix(5))) { a in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(a.name).font(.callout).fontWeight(.semibold)
+                                if let e = a.email {
+                                    Text(e).font(.caption2).foregroundStyle(.secondary)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                                Spacer(minLength: 6)
+                                Text("오늘 \(eok(a.today))")
+                                    .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                            }
+                            if let hud = hudCompact(a) {
+                                hud.font(.caption2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.78)
+                            }
+                            if let eta = model.burnEta[a.name] {
+                                Text("이 속도면 \(eta.window) 소진 ~\(fmtEtaMin(eta.minutes))")
+                                    .font(.caption2)
+                                    .foregroundColor(eta.minutes <= 30 ? DooyouStyle.error : DooyouStyle.warning)
+                            }
                         }
-                        Spacer(minLength: 6)
-                        Text("오늘 \(eok(a.today))")
-                            .font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(DooyouStyle.surfaceSecondary.opacity(0.34), in: RoundedRectangle(cornerRadius: 8))
+                        .help("오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))")
                     }
-                    // 2행: 압축 한도 (5h · wk · Fable), 한 줄 — 넘치면 살짝 축소
-                    if let hud = hudCompact(a) {
-                        hud.font(.caption2).monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
-                    }
-                    // 3행: 소진 ETA (있을 때만) — 없으면 생략해 밀도 통일
-                    if let eta = model.burnEta[a.name] {
-                        Text("이 속도면 \(eta.window) 소진 ~\(fmtEtaMin(eta.minutes))")
+                    if snap.accounts.count > 5 {
+                        Text("외 \(snap.accounts.count - 5)개 계정은 대시보드에서 확인")
                             .font(.caption2)
-                            .foregroundColor(eta.minutes <= 30 ? .red : .orange)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help("오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))")
             }
-            Divider()
+            .padding(12)
+            .background(DooyouStyle.surfaceElevated.opacity(0.78), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+
             Button { (NSApp.delegate as? AppDelegate)?.openDashboard() } label: {
                 HStack { Image(systemName: "chart.bar.xaxis"); Text("대시보드 열기"); Spacer() }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(DooyouStyle.info.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
             }
-            .buttonStyle(.plain).font(.callout)
-            HStack { Text("전원 모드").font(.caption).foregroundStyle(.secondary)
-                if !snap.accounts.isEmpty, !model.powerMode.isEmpty {
-                    Spacer(); Text("현재 \(model.powerMode)").font(.caption2).foregroundStyle(.secondary)
-                } }
-            HStack(spacing: 6) {
-                ForEach(powerModes, id: \.self) { m in
-                    let on = model.powerMode == m
-                    Button { (NSApp.delegate as? AppDelegate)?.applyPower(m) } label: {
-                        VStack(spacing: 3) {
-                            Image(systemName: powerIcon(m)).font(.title3)
-                            Text(m).font(.caption2)
-                        }
-                        .frame(maxWidth: .infinity).padding(.vertical, 7)
-                        .background(on ? Color.accentColor.opacity(0.22) : Color.gray.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Color.accentColor : .clear, lineWidth: 1.5))
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(DooyouStyle.info)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("전원 모드").font(.caption).fontWeight(.semibold)
+                    if !snap.accounts.isEmpty, !model.powerMode.isEmpty {
+                        Spacer()
+                        Text("현재 \(model.powerMode)").font(.caption2).foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
+                }
+                HStack(spacing: 8) {
+                    ForEach(powerModes, id: \.self) { m in
+                        let on = model.powerMode == m
+                        Button { (NSApp.delegate as? AppDelegate)?.applyPower(m) } label: {
+                            VStack(spacing: 4) {
+                                Image(systemName: powerIcon(m)).font(.title3)
+                                Text(m).font(.caption2)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(on ? DooyouStyle.accent : .primary)
+                            .background(on ? DooyouStyle.accent.opacity(0.16) : DooyouStyle.surfaceSecondary.opacity(0.34), in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? DooyouStyle.accent.opacity(0.55) : Color.primary.opacity(0.06), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
+            .padding(12)
+            .background(DooyouStyle.surfaceElevated.opacity(0.78), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
         }
         .padding(12)
         .frame(width: 340)
+        .background(
+            LinearGradient(colors: [DooyouStyle.surfacePrimary, DooyouStyle.surfaceSecondary.opacity(0.45)],
+                           startPoint: .topLeading,
+                           endPoint: .bottomTrailing)
+        )
         .fixedSize(horizontal: false, vertical: true)
     }
 }
@@ -341,11 +405,12 @@ struct CoordinatorOverview: View {
     let status: LaunchAgentStatus
 
     var body: some View {
+        let tone = status.isPersistent ? DooyouStyle.success : DooyouStyle.warning
         HStack(spacing: 8) {
             Image(systemName: status.isPersistent ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(status.isPersistent ? DooyouStyle.success : DooyouStyle.warning)
+                .foregroundStyle(tone)
                 .frame(width: 16)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(status.title)
                     .font(.caption)
                     .fontWeight(.semibold)
@@ -356,16 +421,14 @@ struct CoordinatorOverview: View {
             }
             Spacer()
             if let pid = status.pid {
-                Text("PID \(pid)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                StatusCapsule(text: "PID \(pid)", color: tone)
                     .monospacedDigit()
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background((status.isPersistent ? DooyouStyle.success : DooyouStyle.warning).opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke((status.isPersistent ? DooyouStyle.success : DooyouStyle.warning).opacity(0.18), lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(tone.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(tone.opacity(0.20), lineWidth: 1))
         .help(status.program.isEmpty ? status.detail : status.program)
     }
 }
@@ -375,22 +438,28 @@ struct SystemOverview: View {
 
     // 팝오버 밀도 조정(2026-07-03): 바 2줄+칩 3개 → 요약 1줄. 상세는 대시보드가 담당.
     var body: some View {
-        HStack(spacing: 6) {
-            Text("시스템").font(.subheadline).bold()
-            Spacer()
-            (Text("CPU ") + Text("\(Int(sys.cpu.rounded()))%").foregroundColor(loadColor(sys.cpu))
-             + Text("  메모리 ") + Text("\(Int(sys.memPct.rounded()))%").foregroundColor(loadColor(sys.memPct))
-             + Text("  SSD \(String(format: "%.0f", sys.diskFreeGB))G").foregroundColor(sys.diskFreeGB < 25 ? DooyouStyle.warning : .secondary)
-             + (sys.swap >= 0.05 ? Text("  스왑 \(String(format: "%.1f", sys.swap))G").foregroundColor(sys.swap >= 1 ? DooyouStyle.warning : .secondary) : Text(""))
-             + Text("  ↓\(rate(sys.netDownBytesPerSec))↑\(rate(sys.netUpBytesPerSec))").foregroundColor(.secondary))
-                .font(.caption2).monospacedDigit()
-            Text(systemSummary)
-                .font(.caption2)
-                .foregroundStyle(summaryColor)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("시스템").font(.caption).fontWeight(.semibold)
+                    StatusCapsule(text: systemSummary, color: summaryColor)
+                }
+                (Text("CPU ") + Text("\(Int(sys.cpu.rounded()))%").foregroundColor(loadColor(sys.cpu))
+                 + Text("  메모리 ") + Text("\(Int(sys.memPct.rounded()))%").foregroundColor(loadColor(sys.memPct))
+                 + Text("  SSD \(String(format: "%.0f", sys.diskFreeGB))G").foregroundColor(sys.diskFreeGB < 25 ? DooyouStyle.warning : .secondary)
+                 + (sys.swap >= 0.05 ? Text("  메모리 스왑 \(String(format: "%.1f", sys.swap))G").foregroundColor(sys.swap >= 1 ? DooyouStyle.warning : .secondary) : Text(""))
+                 + Text("  ↓\(rate(sys.netDownBytesPerSec))↑\(rate(sys.netUpBytesPerSec))").foregroundColor(.secondary))
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(DooyouStyle.surfaceElevated.opacity(0.78), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.07), lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(DooyouStyle.surfaceElevated.opacity(0.82), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(summaryColor.opacity(0.16), lineWidth: 1))
         .help("상세 그래프는 대시보드에서")
     }
 
@@ -422,6 +491,7 @@ if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "dump" {
         var line = "  \(a.name): 오늘 \(eok(a.today)) \(usd(a.todayCost)) · 7일 \(eok(a.week)) \(usd(a.weekCost))"
         if let p = a.fiveHourPct { line += " · 5h \(p)%" + (a.fiveHourResetsAt.map { "(\(countdown($0)))" } ?? "") }
         if let p = a.weeklyPct { line += " · wk \(p)%" + (a.weeklyResetsAt.map { "(\(countdown($0)))" } ?? "") }
+        if let p = a.fablePct { line += " · Fable \(p)%" + (a.fableResetsAt.map { "(\(countdown($0)))" } ?? "") }
         if let p = a.monthlyPct { line += " · mo \(p)%" + (a.monthlyResetsAt.map { "(\(countdown($0)))" } ?? "") }
         if let note = a.limitNote { line += " · \(note)" }
         print(line)

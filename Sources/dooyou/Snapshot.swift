@@ -35,11 +35,13 @@ enum SnapshotRenderer {
         var wrote: [String] = []
         if render(popover, to: outDir + "/popover.png") { wrote.append(outDir + "/popover.png") }
 
-        // 대시보드 각 탭도 렌더 — Fable이 전체 UX를 보게. requestedRoute로 탭 지정.
+        // 대시보드 각 탭도 렌더 — onAppear refresh 없이 정적 모델을 그대로 캡처한다.
         for route in [DashboardRoute.home, .analytics, .accounts, .connectors] {
-            dashModel.requestedRoute = route
-            let view = DashboardView(model: dashModel, connections: connections, preferences: preferences, routerStore: routerStore)
-                .frame(width: 1040, height: 720)
+            let view = DashboardView(model: dashModel, connections: connections, preferences: preferences, routerStore: routerStore,
+                                     snapshotRoute: route, snapshotMode: true)
+                .padding(.top, 28)
+                .frame(width: 1040, height: 720, alignment: .topLeading)
+                .clipped()
             let path = outDir + "/dashboard-\(route.rawValue).png"
             if render(view, to: path) { wrote.append(path) }
         }

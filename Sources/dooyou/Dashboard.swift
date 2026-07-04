@@ -127,26 +127,35 @@ struct DashboardView: View {
     @ObservedObject var preferences: PreferencesModel
     @ObservedObject var routerStore: RouterDecisionStore
     @AppStorage("dooyou.dashboardRoute") private var route: DashboardRoute = .home   // 마지막 탭 영속(창 재오픈 시 복원)
+    var snapshotRoute: DashboardRoute? = nil
+    var snapshotMode = false
+
+    private var activeRoute: DashboardRoute { snapshotRoute ?? route }
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             sidebar
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    titleBar
-                    routeContent
+            if snapshotMode {
+                dashboardStack
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ScrollView {
+                    dashboardStack
+                        .padding(24)
                 }
-                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .background(dashboardBackground)
-        .frame(minWidth: 980, minHeight: 700)
+        .frame(minWidth: 860, minHeight: 640)
         .overlay(alignment: .top) {
             if model.loading { Text("불러오는 중…").font(.caption).padding(6)
                 .background(.thinMaterial, in: Capsule()).padding(.top, 6) }
         }
         .onAppear {
+            guard !snapshotMode else { return }
             if let requested = model.requestedRoute {
                 route = requested
                 model.requestedRoute = nil
@@ -157,12 +166,24 @@ struct DashboardView: View {
             model.refreshLaunchAgent()
         }
         .onReceive(model.$requestedRoute) { requested in
-            guard let requested else { return }
+            guard !snapshotMode, let requested else { return }
             route = requested
             model.requestedRoute = nil
         }
-        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in model.refreshSystem() }
-        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in model.refreshLaunchAgent() }
+        .onReceive(Timer.publish(every: 2, on: .main, in: .common).autoconnect()) { _ in
+            if !snapshotMode { model.refreshSystem() }
+        }
+        .onReceive(Timer.publish(every: 10, on: .main, in: .common).autoconnect()) { _ in
+            if !snapshotMode { model.refreshLaunchAgent() }
+        }
+    }
+
+    private var dashboardStack: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            titleBar
+            routeContent
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private var snap: Snapshot { model.dash.snap }
@@ -196,11 +217,11 @@ struct DashboardView: View {
                         HStack(spacing: 9) {
                             Image(systemName: item.symbol)
                                 .frame(width: 16)
-                                .foregroundStyle(route == item ? DooyouStyle.accent : .secondary)
+                                .foregroundStyle(activeRoute == item ? DooyouStyle.accent : .secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(item.title)
                                     .font(.callout)
-                                    .fontWeight(route == item ? .semibold : .medium)
+                                    .fontWeight(activeRoute == item ? .semibold : .medium)
                                 Text(item.subtitle)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
@@ -209,7 +230,7 @@ struct DashboardView: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(route == item ? DooyouStyle.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                        .background(activeRoute == item ? DooyouStyle.accent.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
                 }
@@ -228,7 +249,7 @@ struct DashboardView: View {
     }
 
     @ViewBuilder private var routeContent: some View {
-        switch route {
+        switch activeRoute {
         case .home:
             heroBand
             OnboardingCard(preferences: preferences, connections: connections)
@@ -264,11 +285,12 @@ struct DashboardView: View {
     }
 
     private func routeHeader(_ title: String, _ subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
             Text(subtitle)
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
@@ -289,8 +311,8 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("DOOYOU")
                     .font(.system(size: 24, weight: .bold, design: .rounded))
-                Text("로컬 에이전트 사용량, 커넥터, 시스템 압력을 한곳에서 봅니다.")
-                    .font(.caption)
+                Text("로컬 에이전트 사용량, 커넥터, 시스템 압력을 조용히 정리합니다.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -312,8 +334,8 @@ struct DashboardView: View {
                 .scaledToFit()
                 .frame(width: 76, height: 56)
                 .padding(12)
-                .background(Color.white.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.45), lineWidth: 1))
+                .background(DooyouStyle.surfaceElevated.opacity(0.70), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07), lineWidth: 1))
             VStack(alignment: .leading, spacing: 8) {
                 Text(snap.activeAgents > 0 ? "활발하게 일하는 중" : "조용히 대기 중")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
@@ -345,7 +367,7 @@ struct DashboardView: View {
         .padding(14)
         .background(
             LinearGradient(
-                colors: [DooyouStyle.accent.opacity(0.16), Color.white.opacity(0.30), DooyouStyle.info.opacity(0.08)],
+                colors: [DooyouStyle.accent.opacity(0.14), DooyouStyle.surfaceElevated.opacity(0.56), DooyouStyle.info.opacity(0.07)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -368,7 +390,7 @@ struct DashboardView: View {
         .frame(minWidth: 84, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(Color.white.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
+        .background(DooyouStyle.surfaceElevated.opacity(0.62), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var summaryGrid: some View {
@@ -400,27 +422,16 @@ struct DashboardView: View {
     private var accountsSection: some View {
         DooyouPanel("계정별 사용량") {
             if snap.accounts.isEmpty {
-                HStack {
-                    Image(systemName: "link.badge.plus").foregroundStyle(.secondary)
-                    Text("연결된 로컬 사용량 데이터가 없습니다.").font(.callout).foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.vertical, 4)
+                dashboardEmptyState(
+                    systemImage: model.loading ? "clock" : "link.badge.plus",
+                    title: model.loading ? "계정 사용량을 불러오는 중" : "계정 사용량 데이터가 없습니다",
+                    message: model.loading ? "로컬 Claude, Codex, GLM 기록을 모아 계정별 한도와 리셋 시간을 표시합니다." : "커넥터를 연결하면 오늘, 7일 사용량과 한도 리셋 시간이 여기에 나타납니다."
+                )
             } else {
-                ForEach(snap.accounts) { a in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(a.name).font(.callout).bold()
-                            if let e = a.email { Text(e).font(.caption2).foregroundStyle(.secondary) }
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 1) {
-                            Text("오늘 \(eok(a.today)) · \(usd(a.todayCost))").font(.caption)
-                            Text("7일 \(eok(a.week)) · \(usd(a.weekCost))").font(.caption2).foregroundStyle(.secondary)
-                            if let h = hudText(a) { h.font(.caption2) }
-                        }
+                VStack(spacing: 8) {
+                    ForEach(snap.accounts) { a in
+                        accountUsageRow(a)
                     }
-                    .padding(.vertical, 2)
                 }
             }
         }
@@ -434,20 +445,28 @@ struct DashboardView: View {
                 Label("Claude", systemImage: "circle.fill").font(.caption2).foregroundStyle(claudeColor)
                 Label("Codex", systemImage: "circle.fill").font(.caption2).foregroundStyle(codexColor)
                 Label("GLM", systemImage: "circle.fill").font(.caption2).foregroundStyle(glmColor) }
-            HStack(alignment: .bottom, spacing: 3) {
-                ForEach(Array(days), id: \.self) { d in
-                    let v = agg.byDay[d]!
-                    let h = 90.0
-                    VStack(spacing: 0) {
-                        Rectangle().fill(glmColor).frame(height: h * Double(v.glm) / Double(maxTok))
-                        Rectangle().fill(codexColor).frame(height: h * Double(v.codex) / Double(maxTok))
-                        Rectangle().fill(claudeColor).frame(height: h * Double(v.claude) / Double(maxTok))
+            if days.isEmpty {
+                dashboardEmptyState(
+                    systemImage: model.loading ? "clock" : "chart.bar.xaxis",
+                    title: model.loading ? "일별 사용량을 불러오는 중" : "최근 30일 사용량이 없습니다",
+                    message: model.loading ? "로컬 캐시를 읽어 토큰과 비용 흐름을 계산합니다." : "사용 기록이 쌓이면 Claude, Codex, GLM 막대가 여기에 나타납니다."
+                )
+            } else {
+                HStack(alignment: .bottom, spacing: 3) {
+                    ForEach(Array(days), id: \.self) { d in
+                        let v = agg.byDay[d]!
+                        let h = 90.0
+                        VStack(spacing: 0) {
+                            Rectangle().fill(glmColor).frame(height: h * Double(v.glm) / Double(maxTok))
+                            Rectangle().fill(codexColor).frame(height: h * Double(v.codex) / Double(maxTok))
+                            Rectangle().fill(claudeColor).frame(height: h * Double(v.claude) / Double(maxTok))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .help("\(String(d.suffix(5)))  \(eok(v.total))  \(usd(v.cost))")
                     }
-                    .frame(maxWidth: .infinity)
-                    .help("\(String(d.suffix(5)))  \(eok(v.total))  \(usd(v.cost))")
                 }
+                .frame(height: 90)
             }
-            .frame(height: 90)
         }
     }
 
@@ -455,53 +474,175 @@ struct DashboardView: View {
         let rows = data.sorted { $0.value.tokens > $1.value.tokens }.prefix(8)
         let total = max(1, data.values.reduce(0) { $0 + $1.tokens })
         return DooyouPanel(title) {
-            ForEach(Array(rows), id: \.key) { k, v in
-                let frac = Double(v.tokens) / Double(total)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(k).font(.caption).lineLimit(1)
-                        Spacer()
-                        Text(eok(v.tokens)).font(.caption2).foregroundStyle(.secondary)
-                        Text(usd(v.cost)).font(.caption2).bold()
-                        Text("\(Int((frac * 100).rounded()))%").font(.caption2).foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
-                    }
-                    GeometryReader { g in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.secondary.opacity(0.15))
-                            Capsule().fill(claudeColor).frame(width: max(2, g.size.width * frac))
+            if rows.isEmpty {
+                dashboardEmptyState(
+                    systemImage: model.loading ? "clock" : "chart.pie",
+                    title: model.loading ? "분포를 계산하는 중" : "\(title) 데이터가 없습니다",
+                    message: model.loading ? "최근 사용 기록을 모델과 프로젝트로 묶고 있습니다." : "사용 기록이 쌓이면 상위 항목과 비율이 여기에 표시됩니다."
+                )
+            } else {
+                ForEach(Array(rows), id: \.key) { k, v in
+                    let frac = Double(v.tokens) / Double(total)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(k).font(.caption).lineLimit(1)
+                            Spacer()
+                            Text(eok(v.tokens)).font(.caption2).foregroundStyle(.secondary)
+                            Text(usd(v.cost)).font(.caption2).bold()
+                            Text("\(Int((frac * 100).rounded()))%").font(.caption2).foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
                         }
-                    }.frame(height: 5)
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.secondary.opacity(0.15))
+                                Capsule().fill(claudeColor).frame(width: max(2, g.size.width * frac))
+                            }
+                        }.frame(height: 5)
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var limitsSection: some View {
         DooyouPanel("한도") {
-            ForEach(snap.accounts.filter { $0.fiveHourPct != nil || $0.weeklyPct != nil }) { a in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(a.name).font(.callout).bold()
-                    limitBar("5h", a.fiveHourPct, a.fiveHourResetsAt)
-                    limitBar("주간", a.weeklyPct, a.weeklyResetsAt)
-                    limitBar("Fable", a.fablePct, a.fableResetsAt)   // 클로드 Fable 주간 (claude.ai 대응, 클로드만 렌더)
-                }.padding(.vertical, 2)
+            let limitedAccounts = snap.accounts.filter { hasTrackedLimit($0) }
+            if limitedAccounts.isEmpty {
+                dashboardEmptyState(
+                    systemImage: model.loading ? "clock" : "gauge.with.dots.needle.bottom.50percent",
+                    title: model.loading ? "한도 정보를 확인하는 중" : "표시할 한도가 없습니다",
+                    message: model.loading ? "한도 퍼센트와 다음 리셋 시간을 함께 불러옵니다." : "계정에서 5시간, 주간, Fable 주간 한도를 찾으면 리셋 시각까지 같이 표시합니다."
+                )
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(limitedAccounts) { a in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(a.name)
+                                    .font(.callout)
+                                    .fontWeight(.semibold)
+                                Spacer()
+                                if let email = a.email {
+                                    Text(email)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            limitBar("5시간", a.fiveHourPct, a.fiveHourResetsAt)
+                            limitBar("주간", a.weeklyPct, a.weeklyResetsAt)
+                            limitBar("Fable 주간", a.fablePct, a.fableResetsAt)   // 클로드 Fable 주간 (claude.ai 대응, 클로드만 렌더)
+                            limitBar("월간", a.monthlyPct, a.monthlyResetsAt)
+                        }
+                        .padding(10)
+                        .background(DooyouStyle.surfaceElevated.opacity(0.58), in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.06), lineWidth: 1))
+                    }
+                }
             }
         }
     }
+
+    private func accountUsageRow(_ account: Account) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.name)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                if let email = account.email {
+                    Text(email)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let note = account.limitNote, !hasTrackedLimit(account) {
+                    Text(note)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("오늘 \(eok(account.today)) · \(usd(account.todayCost))")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                Text("7일 \(eok(account.week)) · \(usd(account.weekCost))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                if hasTrackedLimit(account) {
+                    Text(limitSummary(account))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(10)
+        .background(DooyouStyle.surfaceElevated.opacity(0.52), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.05), lineWidth: 1))
+    }
+
+    private func hasTrackedLimit(_ account: Account) -> Bool {
+        account.fiveHourPct != nil || account.weeklyPct != nil || account.fablePct != nil || account.monthlyPct != nil
+    }
+
+    private func limitSummary(_ account: Account) -> String {
+        [
+            limitSummaryPart("5시간", account.fiveHourPct, account.fiveHourResetsAt),
+            limitSummaryPart("주간", account.weeklyPct, account.weeklyResetsAt),
+            limitSummaryPart("Fable 주간", account.fablePct, account.fableResetsAt),
+            limitSummaryPart("월간", account.monthlyPct, account.monthlyResetsAt),
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    }
+
+    private func limitSummaryPart(_ label: String, _ pct: Int?, _ reset: Date?) -> String? {
+        guard let pct else { return nil }
+        return "\(label) \(pct)% · \(resetDescription(reset))"
+    }
+
+    private func resetDescription(_ reset: Date?) -> String {
+        guard let reset else { return "리셋 시간 없음" }
+        return "리셋 \(countdown(reset))"
+    }
+
+    private func dashboardEmptyState(systemImage: String, title: String, message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(DooyouStyle.surfaceSecondary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     @ViewBuilder private func limitBar(_ label: String, _ pct: Int?, _ reset: Date?) -> some View {
         if let p = pct {
             HStack(spacing: 8) {
-                Text(label).font(.caption2).frame(width: 32, alignment: .leading)
+                Text(label).font(.caption2).frame(width: 62, alignment: .leading)
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.secondary.opacity(0.15))
                         Capsule().fill(usedColor(p)).frame(width: max(2, g.size.width * Double(p) / 100))
                     }
                 }.frame(height: 6)
-                Text("\(p)%").font(.caption2).foregroundStyle(usedColor(p)).frame(width: 36, alignment: .trailing)
-                Text(reset.map { "리셋 \(countdown($0))" } ?? "-").font(.caption2).foregroundStyle(.secondary).frame(width: 90, alignment: .trailing)
+                Text("\(p)%").font(.caption2).fontWeight(.semibold).foregroundStyle(usedColor(p)).frame(width: 36, alignment: .trailing)
+                Text(resetDescription(reset)).font(.caption2).foregroundStyle(.secondary).frame(width: 96, alignment: .trailing)
             }
         }
     }
@@ -552,7 +693,7 @@ struct AccountRouteCard: View {
         }
         .frame(maxWidth: .infinity, minHeight: 166, alignment: .topLeading)
         .padding(12)
-        .background(routeTint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .background(DooyouStyle.surfaceElevated.opacity(0.62), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(routeTint.opacity(0.18), lineWidth: 1))
     }
 

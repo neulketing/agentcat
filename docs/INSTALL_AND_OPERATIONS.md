@@ -22,8 +22,10 @@ Useful modes:
 ## Install On This Mac
 
 ```bash
-./script/install_login_item.sh
+./script/build_and_run.sh --install
 ```
+
+`./script/install_login_item.sh` is the direct installer path used by that mode.
 
 This builds the app, copies it to `/Applications/dooyou.app`, writes
 `~/Library/LaunchAgents/local.dooyou.plist`, bootstraps the LaunchAgent, and
